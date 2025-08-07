@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% block title %}Edit {{ customer.name }}{% endblock %}
+{% block content %}
+<h1 class="text-3xl font-bold text-gray-800 mb-6">Edit {{ customer.name }}</h1>
+<div class="bg-white p-8 rounded-xl shadow-md">
+    <form method="POST">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="md:col-span-2"><label for="name" class="block text-sm font-medium text-gray-700">Name</label><input type="text" name="name" id="name" value="{{ customer.name }}" class="mt-1 p-2 border rounded-md w-full" required></div>
+            <div class="md:col-span-2"><label for="address" class="block text-sm font-medium text-gray-700">Address</label><textarea name="address" id="address" rows="3" class="mt-1 p-2 border rounded-md w-full">{{ customer.address }}</textarea></div>
+            <div><label for="icl_start_date" class="block text-sm font-medium text-gray-700">ICL Start Date</label><input type="date" name="icl_start_date" id="icl_start_date" value="{{ customer.icl_start_date.strftime('%Y-%m-%d') }}" class="mt-1 p-2 border rounded-md w-full" required></div>
+            <div><label for="interest_rate" class="block text-sm font-medium text-gray-700">Interest Rate (%)</label><input type="number" name="interest_rate" id="interest_rate" value="{{ customer.interest_rate }}" step="0.01" class="mt-1 p-2 border rounded-md w-full" required></div>
+            <div><label for="tds_rate" class="block text-sm font-medium text-gray-700">TDS Rate (%)</label><input type="number" name="tds_rate" id="tds_rate" value="{{ customer.tds_rate }}" step="0.01" class="mt-1 p-2 border rounded-md w-full" required></div>
+            <div><label for="interest_type" class="block text-sm font-medium text-gray-700">Interest Type</label><select name="interest_type" id="interest_type" class="mt-1 p-2 border rounded-md w-full"><option value="compound" {% if customer.interest_type == 'compound' %}selected{% endif %}>Compound</option><option value="simple" {% if customer.interest_type == 'simple' %}selected{% endif %}>Simple</option></select></div>
+            <div><label for="frequency" class="block text-sm font-medium text-gray-700">Frequency</label><select name="frequency" id="frequency" class="mt-1 p-2 border rounded-md w-full"><option value="quarterly" {% if customer.frequency == 'quarterly' %}selected{% endif %}>Quarterly</option><option value="monthly" {% if customer.frequency == 'monthly' %}selected{% endif %}>Monthly</option><option value="yearly" {% if customer.frequency == 'yearly' %}selected{% endif %}>Yearly</option></select></div>
+        </div>
+        <div class="mt-6"><button type="submit" class="bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg hover:bg-blue-700">Save Changes</button></div>
+    </form>
+</div>
+{% endblock %}
