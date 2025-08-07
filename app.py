@@ -28,6 +28,11 @@ class Customer(db.Model):
     tds_rate = db.Column(db.Float, nullable=False, default=10.0)
     interest_type = db.Column(db.String(20), nullable=False, default='compound') # 'simple' or 'compound'
     frequency = db.Column(db.String(20), nullable=False, default='quarterly') # 'monthly', 'quarterly', 'yearly'
+    penalty_rate = db.Column(db.Float, nullable=False, default=2.0) # Additional penalty rate for overdue
+    status = db.Column(db.String(20), nullable=False, default='active') # 'active', 'overdue', 'closed', 'npa'
+    closure_date = db.Column(db.Date, nullable=True)
+    overdue_days = db.Column(db.Integer, nullable=False, default=0)
+    grace_period = db.Column(db.Integer, nullable=False, default=30) # Grace period in days
     transactions = db.relationship('Transaction', backref='customer', cascade="all, delete-orphan")
 
 class Transaction(db.Model):
@@ -72,14 +77,73 @@ def get_quarter_info(date_obj, start_date_obj):
 def is_leap(year):
     return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
 
+def calculate_overdue_days(customer, current_date=None):
+    """Calculate overdue days based on ICL end date and grace period"""
+    if not customer.icl_end_date:
+        return 0
+    
+    if not current_date:
+        current_date = datetime.now().date()
+    
+    grace_end_date = customer.icl_end_date + timedelta(days=customer.grace_period)
+    
+    if current_date > grace_end_date:
+        return (current_date - grace_end_date).days
+    return 0
+
+def calculate_penalty_interest(principal_amount, penalty_rate, overdue_days):
+    """Calculate penalty interest for overdue amounts"""
+    if overdue_days <= 0:
+        return Decimal('0')
+    
+    # Industry standard: Penalty calculated on daily basis
+    daily_penalty_rate = Decimal(penalty_rate) / Decimal('100') / Decimal('365')
+    penalty_amount = principal_amount * daily_penalty_rate * Decimal(overdue_days)
+    return penalty_amount
+
+def update_loan_status(customer, current_date=None):
+    """Update loan status based on overdue days and industry standards"""
+    if not current_date:
+        current_date = datetime.now().date()
+    
+    overdue_days = calculate_overdue_days(customer, current_date)
+    customer.overdue_days = overdue_days
+    
+    if customer.status == 'closed':
+        return customer.status
+    
+    # Check if loan period is still active (ICL end date not reached)
+    if customer.icl_end_date and current_date <= customer.icl_end_date:
+        customer.status = 'active'
+        return customer.status
+    
+    # If no ICL end date is set, treat as ongoing loan
+    if not customer.icl_end_date:
+        customer.status = 'active'
+        return customer.status
+    
+    # Only check overdue status after ICL period has ended
+    if overdue_days == 0:
+        customer.status = 'active'
+    elif overdue_days <= 90:  # Industry standard: 1-90 days = overdue
+        customer.status = 'overdue'
+    else:  # > 90 days = Non-Performing Asset (NPA)
+        customer.status = 'npa'
+    
+    return customer.status
+
 # --- Calculation Engine ---
 def calculate_data(customer):
     if not customer or not customer.transactions:
         return []
     
+    # Update loan status before calculation
+    update_loan_status(customer)
+    
     settings = {
         'interestRate': Decimal(customer.interest_rate),
-        'tdsRate': Decimal(customer.tds_rate)
+        'tdsRate': Decimal(customer.tds_rate),
+        'penaltyRate': Decimal(customer.penalty_rate)
     }
     
     sorted_txs = sorted(customer.transactions, key=lambda x: x.date)
@@ -197,10 +261,33 @@ def calculate_data(customer):
 
         days_in_year = 366 if is_leap(tx_date.year) else 365
         interest = (outstanding_for_this_row * (settings['interestRate'] / Decimal('100')) * Decimal(days)) / Decimal(days_in_year)
-        net = interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+        
+        # Calculate penalty interest for overdue scenarios
+        penalty_interest = Decimal('0')
+        if customer.icl_end_date and tx_date > customer.icl_end_date:
+            overdue_days_for_tx = calculate_overdue_days(customer, tx_date)
+            if overdue_days_for_tx > 0:
+                penalty_interest = calculate_penalty_interest(outstanding_for_this_row, customer.penalty_rate, min(overdue_days_for_tx, days))
+        
+        total_interest = interest + penalty_interest
+        net = total_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
         current_quarter_net_interest += net
 
-        timeline.append({'id': tx.id,'date': tx.date,'description': tx.description,'paid': Decimal(tx.paid),'received': Decimal(tx.received),'days': days, 'interest': interest, 'net': net, 'tds': interest - net, 'outstanding': outstanding_for_this_row})
+        timeline.append({
+            'id': tx.id,
+            'date': tx.date,
+            'description': tx.description,
+            'paid': Decimal(tx.paid),
+            'received': Decimal(tx.received),
+            'days': days, 
+            'interest': interest,
+            'penalty_interest': penalty_interest,
+            'total_interest': total_interest,
+            'net': net, 
+            'tds': total_interest - net, 
+            'outstanding': outstanding_for_this_row,
+            'is_overdue': customer.icl_end_date and tx_date > customer.icl_end_date
+        })
         running_outstanding = outstanding_for_this_row
 
     final_outstanding = running_outstanding + current_quarter_net_interest
@@ -225,7 +312,7 @@ def customers():
 def customer_detail(customer_id):
     customer = Customer.query.get_or_404(customer_id)
     calculated_data = calculate_data(customer)
-    return render_template('customer_detail.html', customer=customer, data=calculated_data, today=datetime.now().strftime('%Y-%m-%d'))
+    return render_template('customer_detail.html', customer=customer, data=calculated_data, today=datetime.now().strftime('%Y-%m-%d'),datetime=datetime)
 
 @app.route('/add_customer', methods=['GET', 'POST'])
 def add_customer():
@@ -242,7 +329,9 @@ def add_customer():
             interest_rate=float(request.form['interest_rate']),
             tds_rate=float(request.form['tds_rate']),
             interest_type=request.form['interest_type'],
-            frequency=request.form['frequency']
+            frequency=request.form['frequency'],
+            penalty_rate=float(request.form.get('penalty_rate', 2.0)),
+            grace_period=int(request.form.get('grace_period', 30))
         )
         db.session.add(new_customer)
         db.session.commit()
@@ -265,6 +354,8 @@ def edit_customer(customer_id):
         customer.tds_rate = float(request.form['tds_rate'])
         customer.interest_type = request.form['interest_type']
         customer.frequency = request.form['frequency']
+        customer.penalty_rate = float(request.form.get('penalty_rate', customer.penalty_rate))
+        customer.grace_period = int(request.form.get('grace_period', customer.grace_period))
         db.session.commit()
         flash(f"Customer '{customer.name}' updated successfully!", 'success')
         return redirect(url_for('customer_detail', customer_id=customer.id))
@@ -323,6 +414,84 @@ def customer_reports(customer_id):
     calculated_data = calculate_data(customer)
     return render_template('customer_reports.html', customer=customer, data=calculated_data)
 
+@app.route('/customer/<int:customer_id>/close_loan', methods=['POST'])
+def close_loan(customer_id):
+    customer = Customer.query.get_or_404(customer_id)
+    closure_date = datetime.strptime(request.form['closure_date'], '%Y-%m-%d').date()
+    
+    # Calculate final settlement amount
+    settlement_amount = calculate_settlement_amount(customer, closure_date)
+    
+    # Add final settlement transaction
+    settlement_tx = Transaction(
+        date=closure_date,
+        description='Loan Closure - Final Settlement',
+        paid=Decimal('0'),
+        received=float(settlement_amount['total_settlement']),
+        customer_id=customer.id
+    )
+    db.session.add(settlement_tx)
+    
+    # Update customer status
+    customer.status = 'closed'
+    customer.closure_date = closure_date
+    customer.overdue_days = 0
+    
+    db.session.commit()
+    flash(f'Loan closed successfully. Settlement amount: {settlement_amount["total_settlement"]:,.2f}', 'success')
+    return redirect(url_for('customer_detail', customer_id=customer.id))
+
+def calculate_settlement_amount(customer, closure_date):
+    """Calculate final settlement amount including all dues and penalties"""
+    calculated_data = calculate_data(customer)
+    
+    if not calculated_data:
+        return {
+            'outstanding_principal': Decimal('0'),
+            'accrued_interest': Decimal('0'),
+            'penalty_amount': Decimal('0'),
+            'total_settlement': Decimal('0')
+        }
+    
+    # Get last outstanding balance
+    last_entry = calculated_data[-1]
+    outstanding_balance = last_entry['outstanding']
+    
+    # Calculate additional interest/penalty from last transaction to closure date
+    last_date = last_entry['date']
+    additional_days = (closure_date - last_date).days
+    
+    additional_interest = Decimal('0')
+    penalty_amount = Decimal('0')
+    
+    if additional_days > 0:
+        settings = {
+            'interestRate': Decimal(customer.interest_rate),
+            'tdsRate': Decimal(customer.tds_rate)
+        }
+        
+        days_in_year = 366 if is_leap(closure_date.year) else 365
+        additional_interest = (outstanding_balance * (settings['interestRate'] / Decimal('100')) * Decimal(additional_days)) / Decimal(days_in_year)
+        
+        # Calculate penalty if overdue
+        if customer.icl_end_date and closure_date > customer.icl_end_date:
+            overdue_days = calculate_overdue_days(customer, closure_date)
+            if overdue_days > 0:
+                penalty_amount = calculate_penalty_interest(outstanding_balance, customer.penalty_rate, min(overdue_days, additional_days))
+    
+    total_additional = additional_interest + penalty_amount
+    net_additional = total_additional * (Decimal('1') - Decimal(customer.tds_rate) / Decimal('100'))
+    
+    total_settlement = outstanding_balance + net_additional
+    
+    return {
+        'outstanding_principal': outstanding_balance,
+        'accrued_interest': additional_interest,
+        'penalty_amount': penalty_amount,
+        'net_additional': net_additional,
+        'total_settlement': total_settlement
+    }
+
 @app.route('/customer/<int:customer_id>/balance_calculator', methods=['GET', 'POST'])
 def calculate_balance(customer_id):
     customer = Customer.query.get_or_404(customer_id)
@@ -353,8 +522,17 @@ def calculate_balance(customer_id):
                          today=datetime.now().strftime('%Y-%m-%d'))
 
 def calculate_balance_at_date(customer, target_date):
-    """Calculate the exact balance at a specific date"""
+    """Calculate the exact balance at a specific date using the same logic as the main calculation"""
     if not customer.transactions:
+        # No transactions case - calculate simple interest from ICL start to target date
+        effective_target_date = target_date
+        is_beyond_icl_end = False
+        if customer.icl_end_date and target_date > customer.icl_end_date:
+            effective_target_date = customer.icl_end_date
+            is_beyond_icl_end = True
+        
+        days_from_start = (effective_target_date - customer.icl_start_date).days
+        # With no transactions, balance remains 0
         return {
             'calculation_date': target_date,
             'outstanding_balance': Decimal('0'),
@@ -362,10 +540,11 @@ def calculate_balance_at_date(customer, target_date):
             'total_received': Decimal('0'),
             'total_interest': Decimal('0'),
             'net_interest': Decimal('0'),
-            'days_from_start': (target_date - customer.icl_start_date).days,
+            'days_from_start': days_from_start,
             'transaction_count': 0,
             'last_transaction_date': None,
-            'is_beyond_icl_end': customer.icl_end_date and target_date > customer.icl_end_date
+            'is_beyond_icl_end': is_beyond_icl_end,
+            'is_predicted': False
         }
     
     # Respect ICL end date constraint
@@ -375,116 +554,78 @@ def calculate_balance_at_date(customer, target_date):
         effective_target_date = customer.icl_end_date
         is_beyond_icl_end = True
     
-    settings = {
-        'interestRate': Decimal(customer.interest_rate),
-        'tdsRate': Decimal(customer.tds_rate)
-    }
+    # Use the main calculation engine and filter results up to target date
+    full_timeline = calculate_data(customer)
     
-    # Get transactions up to the target date
-    relevant_transactions = sorted(
-        [tx for tx in customer.transactions if tx.date <= effective_target_date],
-        key=lambda x: x.date
-    )
-    
-    if not relevant_transactions:
-        return {
-            'calculation_date': target_date,
-            'outstanding_balance': Decimal('0'),
-            'total_paid': Decimal('0'),
-            'total_received': Decimal('0'),
-            'total_interest': Decimal('0'),
-            'net_interest': Decimal('0'),
-            'days_from_start': (target_date - customer.icl_start_date).days,
-            'transaction_count': 0,
-            'last_transaction_date': None,
-            'is_beyond_icl_end': is_beyond_icl_end
-        }
-    
-    running_outstanding = Decimal('0')
+    # Find all entries up to and including the target date
+    relevant_entries = []
+    running_balance = Decimal('0')
     total_paid = Decimal('0')
     total_received = Decimal('0')
     total_interest = Decimal('0')
     net_interest = Decimal('0')
+    last_transaction_date = None
     
-    current_quarter_net_interest = Decimal('0')
-    last_quarter_info = get_quarter_info(relevant_transactions[0].date, customer.icl_start_date)
-    
-    for i, tx in enumerate(relevant_transactions):
-        tx_date = tx.date
-        tx_quarter_info = get_quarter_info(tx_date, customer.icl_start_date)
-        
-        # Track totals
-        total_paid += Decimal(tx.paid)
-        total_received += Decimal(tx.received)
-        
-        # Handle quarter transitions
-        if tx_quarter_info['name'] != last_quarter_info['name']:
-            # Close previous quarter
-            running_outstanding += current_quarter_net_interest
-            net_interest += current_quarter_net_interest
+    for entry in full_timeline:
+        if entry['date'] <= effective_target_date:
+            relevant_entries.append(entry)
+            running_balance = entry['outstanding']
             
-            # Add opening balance for current quarter
-            opening_end_date = min(tx_date, effective_target_date)
-            days_opening = (opening_end_date - tx_quarter_info['startDate']).days
-            days_in_year_opening = 366 if is_leap(tx_quarter_info['startDate'].year) else 365
-            interest_opening = (running_outstanding * (settings['interestRate'] / Decimal('100')) * Decimal(days_opening)) / Decimal(days_in_year_opening)
-            net_opening = interest_opening * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+            # Track totals only for actual transactions (not summaries)
+            if not entry.get('isSummary') and not entry.get('isOpening'):
+                total_paid += entry['paid']
+                total_received += entry['received']
+                last_transaction_date = entry['date']
             
-            total_interest += interest_opening
-            current_quarter_net_interest = net_opening
-            last_quarter_info = tx_quarter_info
-        
-        outstanding_for_this_row = running_outstanding + Decimal(tx.paid) - Decimal(tx.received)
-        
-        # Calculate interest from this transaction to next transaction or target date
-        next_tx = relevant_transactions[i + 1] if i + 1 < len(relevant_transactions) else None
-        end_date = tx_quarter_info['endDate']
-        is_last_tx_in_quarter = True
-        
-        # Determine end date for interest calculation
-        if next_tx:
-            next_tx_date = next_tx.date
-            next_tx_quarter_info = get_quarter_info(next_tx_date, customer.icl_start_date)
-            if next_tx_quarter_info['name'] == tx_quarter_info['name']:
-                end_date = min(next_tx_date, effective_target_date)
-                is_last_tx_in_quarter = False
-        
-        # If this is the last transaction, calculate interest up to target date
-        if i == len(relevant_transactions) - 1:
-            if effective_target_date <= tx_quarter_info['endDate']:
-                end_date = effective_target_date
-                is_last_tx_in_quarter = False
-        
-        end_date = min(end_date, effective_target_date)
-        
-        days = (end_date - tx_date).days
-        if is_last_tx_in_quarter and end_date == tx_quarter_info['endDate']:
-            days += 1
-        
-        if days > 0:
-            days_in_year = 366 if is_leap(tx_date.year) else 365
-            interest = (outstanding_for_this_row * (settings['interestRate'] / Decimal('100')) * Decimal(days)) / Decimal(days_in_year)
-            net = interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
-            current_quarter_net_interest += net
-            total_interest += interest
-        
-        running_outstanding = outstanding_for_this_row
+            # Track all interest
+            if entry.get('interest'):
+                total_interest += entry['interest']
+            if entry.get('net'):
+                net_interest += entry['net']
     
-    # Add final quarter interest if target date is beyond last transaction
-    final_outstanding = running_outstanding + current_quarter_net_interest
-    net_interest += current_quarter_net_interest
+    # If target date is beyond last entry, we need to predict
+    is_predicted = False
+    if relevant_entries and effective_target_date > relevant_entries[-1]['date']:
+        is_predicted = True
+        last_entry = relevant_entries[-1]
+        last_date = last_entry['date']
+        last_balance = last_entry['outstanding']
+        
+        # Calculate additional interest from last entry date to target date
+        additional_days = (effective_target_date - last_date).days
+        if additional_days > 0:
+            settings = {
+                'interestRate': Decimal(customer.interest_rate),
+                'tdsRate': Decimal(customer.tds_rate)
+            }
+            
+            days_in_year = 366 if is_leap(last_date.year) else 365
+            additional_interest = (last_balance * (settings['interestRate'] / Decimal('100')) * Decimal(additional_days)) / Decimal(days_in_year)
+            additional_net_interest = additional_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+            
+            total_interest += additional_interest
+            net_interest += additional_net_interest
+            running_balance += additional_net_interest
+    
+    # Get last actual transaction date
+    all_transactions = sorted(customer.transactions, key=lambda x: x.date)
+    actual_last_transaction_date = all_transactions[-1].date if all_transactions else None
+    
+    # Determine if this is truly a prediction (beyond last actual transaction)
+    is_predicted = effective_target_date > actual_last_transaction_date if actual_last_transaction_date else False
     
     return {
         'calculation_date': target_date,
-        'outstanding_balance': final_outstanding,
+        'outstanding_balance': running_balance,
         'total_paid': total_paid,
         'total_received': total_received,
         'total_interest': total_interest,
         'net_interest': net_interest,
         'days_from_start': (target_date - customer.icl_start_date).days,
-        'transaction_count': len(relevant_transactions),
-        'last_transaction_date': relevant_transactions[-1].date if relevant_transactions else None,
-        'is_beyond_icl_end': is_beyond_icl_end
+        'transaction_count': len([tx for tx in customer.transactions if tx.date <= effective_target_date]),
+        'last_transaction_date': actual_last_transaction_date,
+        'is_beyond_icl_end': is_beyond_icl_end,
+        'is_predicted': is_predicted
     }
 
 @app.route('/export/<int:customer_id>')
