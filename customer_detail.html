@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+{% block title %}{{ customer.name }} - Details{% endblock %}
+{% block content %}
+<header class="mb-8">
+    <h1 class="text-4xl font-extrabold text-gray-800 text-center">{{ customer.name }}'s Ledger</h1>
+    <p class="text-center text-gray-500 mt-2">An automated ledger for interest calculations.</p>
+</header>
+<main>
+    <!-- Settings Display -->
+    <div class="bg-white p-6 rounded-xl shadow-md mb-8">
+        <div class="flex justify-between items-center">
+            <h2 class="text-2xl font-bold text-gray-800">Settings</h2>
+            <a href="{{ url_for('edit_customer', customer_id=customer.id) }}" class="bg-gray-200 text-gray-800 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300">Edit Settings</a>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-6 mt-4">
+            <div><span class="font-semibold">ICL Start Date:</span> {{ customer.icl_start_date | format_date }}</div>
+            <div><span class="font-semibold">Interest Rate:</span> {{ customer.interest_rate }}%</div>
+            <div><span class="font-semibold">TDS Rate:</span> {{ customer.tds_rate }}%</div>
+            <div><span class="font-semibold">Interest Type:</span> {{ customer.interest_type | capitalize }}</div>
+            <div><span class="font-semibold">Frequency:</span> {{ customer.frequency | capitalize }}</div>
+        </div>
+    </div>
+
+    <!-- Transaction Form -->
+    <div class="bg-white p-6 rounded-xl shadow-md mb-8">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-2xl font-bold text-gray-800">Add New Transaction</h2>
+            <div class="flex items-center gap-2">
+                <a href="{{ url_for('export_excel', customer_id=customer.id) }}" class="bg-green-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-green-700 text-sm">Export to Excel</a>
+                <form method="POST" action="{{ url_for('delete_all_transactions', customer_id=customer.id) }}" onsubmit="return confirm('Delete all transactions for this customer?');" class="m-0">
+                    <button type="submit" class="bg-red-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-red-700 text-sm">Delete All</button>
+                </form>
+            </div>
+        </div>
+        <form action="{{ url_for('add_transaction', customer_id=customer.id) }}" method="POST" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+            <div class="flex flex-col"><label for="date" class="text-sm font-medium text-gray-600 mb-1">Date</label><input type="date" id="date" name="date" value="{{ today }}" class="p-2 border rounded-lg" required></div>
+            <div class="flex flex-col lg:col-span-2"><label for="description" class="text-sm font-medium text-gray-600 mb-1">Description</label><input type="text" id="description" name="description" placeholder="e.g., Payment Received" class="p-2 border rounded-lg" required></div>
+            <div class="flex flex-col"><label for="paid" class="text-sm font-medium text-gray-600 mb-1">Amount Paid</label><input type="number" id="paid" name="paid" placeholder="0" class="p-2 border rounded-lg" min="0" step="0.01"></div>
+            <div class="flex flex-col"><label for="received" class="text-sm font-medium text-gray-600 mb-1">Amount Received</label><input type="number" id="received" name="received" placeholder="0" class="p-2 border rounded-lg" min="0" step="0.01"></div>
+            <button type="submit" class="bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-blue-700 w-full lg:w-auto">Add</button>
+        </form>
+    </div>
+
+    <!-- Transaction Table -->
+    <div class="bg-white rounded-xl shadow-md overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-bold uppercase">Date</th>
+                        <th class="px-6 py-3 text-left text-xs font-bold uppercase">Description</th>
+                        <th class="px-6 py-3 text-left text-xs font-bold uppercase">Amount Paid</th>
+                        <th class="px-6 py-3 text-left text-xs font-bold uppercase">Amount Received</th>
+                        <th class="px-6 py-3 text-left text-xs font-bold uppercase">Days</th>
+                        <th class="px-6 py-3 text-left text-xs font-bold uppercase">Outstanding</th>
+                        <th class="px-6 py-3 text-left text-xs font-bold uppercase">Interest @ {{ customer.interest_rate }}%</th>
+                        <th class="px-6 py-3 text-left text-xs font-bold uppercase">TDS @ {{ customer.tds_rate }}%</th>
+                        <th class="px-6 py-3 text-left text-xs font-bold uppercase">Net Interest</th>
+                        <th class="px-6 py-3 text-left text-xs font-bold uppercase">Action</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for row in data %}
+                    <tr class="{% if row.isSummary %}bg-green-100 font-bold{% elif row.isOpening %}bg-purple-100{% endif %} hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.date | format_date }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm {% if row.isSummary %}text-green-800 italic{% elif row.isOpening %}text-purple-800 italic{% endif %}">{{ row.description }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-green-600">{{ row.paid | format_currency }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-red-600">{{ row.received | format_currency }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">{{ '' if row.isSummary else row.days }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold">{{ row.outstanding | format_currency }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">{{ '' if row.isSummary else (row.interest | format_currency) }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">{{ '' if row.isSummary else (row.tds | format_currency) }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-blue-800">{{ '' if row.isSummary else (row.net | format_currency) }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-center">
+                            {% if not row.isSummary and not row.isOpening %}
+                            <form action="{{ url_for('delete_transaction', transaction_id=row.id) }}" method="POST" onsubmit="return confirm('Delete this transaction?');">
+                                <button type="submit" class="text-red-500 hover:text-red-700 font-semibold">Delete</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="10" class="text-center py-8 text-gray-500">No transactions for this customer yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</main>
+{% endblock %}
