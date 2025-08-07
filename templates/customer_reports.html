@@ -1,0 +1,316 @@
+
+{% extends 'base.html' %}
+{% block title %}{{ customer.name }} - Reports{% endblock %}
+{% block content %}
+<div class="fade-in">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-8">
+        <div class="flex items-center space-x-4">
+            <a href="{{ url_for('customer_detail', customer_id=customer.id) }}" class="text-gray-600 hover:text-gray-900">
+                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+                </svg>
+            </a>
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900">{{ customer.name }} - Financial Reports</h1>
+                <p class="text-gray-600">Comprehensive analysis and insights</p>
+            </div>
+        </div>
+        <div class="flex space-x-3">
+            <button onclick="window.print()" class="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors hover-lift">
+                Print Report
+            </button>
+            <a href="{{ url_for('export_excel', customer_id=customer.id) }}" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors hover-lift">
+                Export Excel
+            </a>
+        </div>
+    </div>
+
+    <!-- Key Metrics -->
+    {% set total_paid = data | selectattr('paid') | map(attribute='paid') | sum %}
+    {% set total_received = data | selectattr('received') | map(attribute='received') | sum %}
+    {% set total_interest = data | selectattr('interest') | map(attribute='interest') | sum %}
+    {% set total_tds = data | selectattr('tds') | map(attribute='tds') | sum %}
+    {% set final_outstanding = data[-1].outstanding if data else 0 %}
+    {% set net_flow = total_received - total_paid %}
+    
+    <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6 mb-8">
+        <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up">
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-blue-600 break-words overflow-hidden">{{ total_paid | format_currency }}</div>
+            <div class="text-sm text-gray-500 mt-1">Total Paid</div>
+            <div class="mt-2 text-xs {% if total_paid > 0 %}text-green-600{% else %}text-gray-400{% endif %}">
+                {% if total_paid > 0 %}+{{ ((total_paid / (total_paid + total_received)) * 100) | round(1) }}%{% else %}No data{% endif %}
+            </div>
+        </div>
+        
+        <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up" style="animation-delay: 0.1s">
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-green-600 break-words overflow-hidden">{{ total_received | format_currency }}</div>
+            <div class="text-sm text-gray-500 mt-1">Total Received</div>
+            <div class="mt-2 text-xs {% if total_received > 0 %}text-green-600{% else %}text-gray-400{% endif %}">
+                {% if total_received > 0 %}+{{ ((total_received / (total_paid + total_received)) * 100) | round(1) }}%{% else %}No data{% endif %}
+            </div>
+        </div>
+        
+        <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up" style="animation-delay: 0.2s">
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-purple-600 break-words overflow-hidden">{{ total_interest | format_currency }}</div>
+            <div class="text-sm text-gray-500 mt-1">Total Interest</div>
+            <div class="mt-2 text-xs text-blue-600">{{ customer.interest_rate }}% rate</div>
+        </div>
+        
+        <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up" style="animation-delay: 0.3s">
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-red-600 break-words overflow-hidden">{{ total_tds | format_currency }}</div>
+            <div class="text-sm text-gray-500 mt-1">Total TDS</div>
+            <div class="mt-2 text-xs text-red-600">{{ customer.tds_rate }}% deducted</div>
+        </div>
+        
+        <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up" style="animation-delay: 0.4s">
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold {% if net_flow >= 0 %}text-green-600{% else %}text-red-600{% endif %} break-words overflow-hidden">{{ net_flow | format_currency }}</div>
+            <div class="text-sm text-gray-500 mt-1">Net Cash Flow</div>
+            <div class="mt-2 text-xs {% if net_flow >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                {% if net_flow >= 0 %}Positive{% else %}Negative{% endif %}
+            </div>
+        </div>
+        
+        <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up" style="animation-delay: 0.5s">
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-orange-600 break-words overflow-hidden">{{ final_outstanding | format_currency }}</div>
+            <div class="text-sm text-gray-500 mt-1">Outstanding</div>
+            <div class="mt-2 text-xs text-orange-600">Current balance</div>
+        </div>
+    </div>
+
+    <!-- Charts Section -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+        <!-- Cash Flow Chart -->
+        <div class="bg-white rounded-xl shadow-md p-6 slide-up">
+            <h3 class="text-xl font-semibold text-gray-900 mb-4">Cash Flow Analysis</h3>
+            <div class="relative h-64">
+                <canvas id="cashFlowChart"></canvas>
+            </div>
+        </div>
+        
+        <!-- Interest vs Principal Chart -->
+        <div class="bg-white rounded-xl shadow-md p-6 slide-up">
+            <h3 class="text-xl font-semibold text-gray-900 mb-4">Interest vs Principal</h3>
+            <div class="relative h-64">
+                <canvas id="interestChart"></canvas>
+            </div>
+        </div>
+        
+        <!-- Outstanding Balance Trend -->
+        <div class="bg-white rounded-xl shadow-md p-6 slide-up lg:col-span-2">
+            <h3 class="text-xl font-semibold text-gray-900 mb-4">Outstanding Balance Trend</h3>
+            <div class="relative h-80">
+                <canvas id="balanceChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detailed Analysis -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
+        <!-- Period Analysis -->
+        <div class="bg-white rounded-xl shadow-md p-6 slide-up">
+            <h3 class="text-xl font-semibold text-gray-900 mb-4">Period Analysis</h3>
+            <div class="space-y-4">
+                <div class="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                    <span class="text-sm font-medium text-gray-700">ICL Start</span>
+                    <span class="text-sm font-bold text-blue-600">{{ customer.icl_start_date | format_date }}</span>
+                </div>
+                <div class="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                    <span class="text-sm font-medium text-gray-700">ICL End</span>
+                    <span class="text-sm font-bold text-blue-600">
+                        {% if customer.icl_end_date %}{{ customer.icl_end_date | format_date }}{% else %}Ongoing{% endif %}
+                    </span>
+                </div>
+                <div class="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                    <span class="text-sm font-medium text-gray-700">Duration</span>
+                    <span class="text-sm font-bold text-purple-600">
+                        {% if customer.icl_end_date %}
+                            {{ ((customer.icl_end_date - customer.icl_start_date).days / 30.44) | round(1) }} months
+                        {% else %}
+                            Ongoing
+                        {% endif %}
+                    </span>
+                </div>
+                <div class="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                    <span class="text-sm font-medium text-gray-700">Transactions</span>
+                    <span class="text-sm font-bold text-green-600">{{ data | selectattr('id') | selectattr('id', 'number') | list | length }}</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Rate Analysis -->
+        <div class="bg-white rounded-xl shadow-md p-6 slide-up">
+            <h3 class="text-xl font-semibold text-gray-900 mb-4">Rate Analysis</h3>
+            <div class="space-y-4">
+                <div class="text-center p-4 bg-blue-50 rounded-lg">
+                    <div class="text-3xl font-bold text-blue-600">{{ customer.interest_rate }}%</div>
+                    <div class="text-sm text-gray-600">Annual Interest Rate</div>
+                </div>
+                <div class="text-center p-4 bg-red-50 rounded-lg">
+                    <div class="text-3xl font-bold text-red-600">{{ customer.tds_rate }}%</div>
+                    <div class="text-sm text-gray-600">TDS Rate</div>
+                </div>
+                <div class="text-center p-4 bg-green-50 rounded-lg">
+                    <div class="text-3xl font-bold text-green-600">{{ (customer.interest_rate * (1 - customer.tds_rate/100)) | round(2) }}%</div>
+                    <div class="text-sm text-gray-600">Effective Rate</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Performance Metrics -->
+        <div class="bg-white rounded-xl shadow-md p-6 slide-up">
+            <h3 class="text-xl font-semibold text-gray-900 mb-4">Performance</h3>
+            <div class="space-y-4">
+                <div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <span class="text-gray-600">Interest Efficiency</span>
+                        <span class="font-medium">{{ ((total_interest / (total_paid + 1)) * 100) | round(1) }}%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div class="bg-blue-600 h-2 rounded-full" style="width: {{ ((total_interest / (total_paid + 1)) * 100) | round(1) }}%"></div>
+                    </div>
+                </div>
+                <div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <span class="text-gray-600">Recovery Rate</span>
+                        <span class="font-medium">{{ ((total_received / (total_paid + 1)) * 100) | round(1) }}%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div class="bg-green-600 h-2 rounded-full" style="width: {{ ((total_received / (total_paid + 1)) * 100) | round(1) }}%"></div>
+                    </div>
+                </div>
+                <div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <span class="text-gray-600">TDS Impact</span>
+                        <span class="font-medium">{{ ((total_tds / (total_interest + 1)) * 100) | round(1) }}%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div class="bg-red-600 h-2 rounded-full" style="width: {{ ((total_tds / (total_interest + 1)) * 100) | round(1) }}%"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Chart configurations
+const chartData = {
+    labels: [{% for row in data[:10] %}'{{ row.date | format_date }}'{% if not loop.last %},{% endif %}{% endfor %}],
+    outstanding: [{% for row in data[:10] %}{{ row.outstanding }}{% if not loop.last %},{% endif %}{% endfor %}],
+    paid: [{% for row in data[:10] %}{{ row.paid }}{% if not loop.last %},{% endif %}{% endfor %}],
+    received: [{% for row in data[:10] %}{{ row.received }}{% if not loop.last %},{% endif %}{% endfor %}],
+    interest: [{% for row in data[:10] %}{{ row.get('interest', 0) }}{% if not loop.last %},{% endif %}{% endfor %}]
+};
+
+// Cash Flow Chart
+const cashFlowCtx = document.getElementById('cashFlowChart').getContext('2d');
+new Chart(cashFlowCtx, {
+    type: 'bar',
+    data: {
+        labels: chartData.labels,
+        datasets: [{
+            label: 'Paid',
+            data: chartData.paid,
+            backgroundColor: 'rgba(59, 130, 246, 0.8)',
+            borderColor: 'rgb(59, 130, 246)',
+            borderWidth: 1
+        }, {
+            label: 'Received',
+            data: chartData.received,
+            backgroundColor: 'rgba(16, 185, 129, 0.8)',
+            borderColor: 'rgb(16, 185, 129)',
+            borderWidth: 1
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                position: 'top',
+            }
+        },
+        scales: {
+            y: {
+                beginAtZero: true,
+                ticks: {
+                    callback: function(value) {
+                        return '₹' + value.toLocaleString();
+                    }
+                }
+            }
+        }
+    }
+});
+
+// Interest Chart (Doughnut)
+const interestCtx = document.getElementById('interestChart').getContext('2d');
+new Chart(interestCtx, {
+    type: 'doughnut',
+    data: {
+        labels: ['Total Interest', 'TDS Deducted', 'Net Interest'],
+        datasets: [{
+            data: [{{ total_interest }}, {{ total_tds }}, {{ total_interest - total_tds }}],
+            backgroundColor: [
+                'rgba(139, 92, 246, 0.8)',
+                'rgba(239, 68, 68, 0.8)',
+                'rgba(34, 197, 94, 0.8)'
+            ],
+            borderColor: [
+                'rgb(139, 92, 246)',
+                'rgb(239, 68, 68)',
+                'rgb(34, 197, 94)'
+            ],
+            borderWidth: 2
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                position: 'bottom'
+            }
+        }
+    }
+});
+
+// Balance Trend Chart
+const balanceCtx = document.getElementById('balanceChart').getContext('2d');
+new Chart(balanceCtx, {
+    type: 'line',
+    data: {
+        labels: chartData.labels,
+        datasets: [{
+            label: 'Outstanding Balance',
+            data: chartData.outstanding,
+            borderColor: 'rgb(251, 146, 60)',
+            backgroundColor: 'rgba(251, 146, 60, 0.1)',
+            borderWidth: 3,
+            fill: true,
+            tension: 0.4
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                display: false
+            }
+        },
+        scales: {
+            y: {
+                beginAtZero: true,
+                ticks: {
+                    callback: function(value) {
+                        return '₹' + value.toLocaleString();
+                    }
+                }
+            }
+        }
+    }
+});
+</script>
+{% endblock %}
