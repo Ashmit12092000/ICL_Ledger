@@ -1,0 +1,233 @@
+
+{% extends 'base.html' %}
+{% block title %}{{ customer.name }} - Details{% endblock %}
+{% block content %}
+<div class="fade-in">
+    <!-- Customer Header -->
+    <div class="bg-white rounded-xl shadow-md p-6 mb-8 slide-up">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between">
+            <div class="flex items-center space-x-4 mb-4 lg:mb-0">
+                <div class="h-16 w-16 bg-blue-100 rounded-full flex items-center justify-center">
+                    <span class="text-xl font-bold text-blue-600">{{ customer.name[:2].upper() }}</span>
+                </div>
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-900">{{ customer.name }}</h1>
+                    <p class="text-gray-600">{{ customer.address }}</p>
+                </div>
+            </div>
+            <div class="flex space-x-3">
+                <a href="{{ url_for('calculate_balance', customer_id=customer.id) }}" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors hover-lift">
+                    Balance Calculator
+                </a>
+                <a href="{{ url_for('customer_reports', customer_id=customer.id) }}" class="bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-lg transition-colors hover-lift">
+                    View Reports
+                </a>
+                <a href="{{ url_for('export_excel', customer_id=customer.id) }}" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors hover-lift">
+                    Export Excel
+                </a>
+                <a href="{{ url_for('edit_customer', customer_id=customer.id) }}" class="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors hover-lift">
+                    Edit Customer
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Customer Settings -->
+    <div class="bg-white rounded-xl shadow-md p-6 mb-8 slide-up">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4">Loan Settings</h2>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-6">
+            <div class="text-center">
+                <div class="text-2xl font-bold text-blue-600">{{ customer.icl_start_date | format_date }}</div>
+                <div class="text-sm text-gray-500">ICL Start Date</div>
+            </div>
+            <div class="text-center">
+                <div class="text-2xl font-bold text-blue-600">
+                    {% if customer.icl_end_date %}{{ customer.icl_end_date | format_date }}{% else %}Ongoing{% endif %}
+                </div>
+                <div class="text-sm text-gray-500">ICL End Date</div>
+            </div>
+            <div class="text-center">
+                <div class="text-2xl font-bold text-green-600">{{ customer.interest_rate }}%</div>
+                <div class="text-sm text-gray-500">Interest Rate</div>
+            </div>
+            <div class="text-center">
+                <div class="text-2xl font-bold text-red-600">{{ customer.tds_rate }}%</div>
+                <div class="text-sm text-gray-500">TDS Rate</div>
+            </div>
+            <div class="text-center">
+                <div class="text-2xl font-bold text-purple-600">{{ customer.frequency | capitalize }}</div>
+                <div class="text-sm text-gray-500">Frequency</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Transaction Form -->
+    <div class="bg-white rounded-xl shadow-md p-6 mb-8 slide-up">
+        <h2 class="text-xl font-semibold text-gray-900 mb-4">Add New Transaction</h2>
+        <form method="POST" action="{{ url_for('add_transaction', customer_id=customer.id) }}" class="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <div>
+                <label for="date" class="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <input type="date" id="date" name="date" max="{% if customer.icl_end_date %}{{ customer.icl_end_date }}{% else %}{{ today }}{% endif %}" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" required>
+            </div>
+            <div>
+                <label for="description" class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <input type="text" id="description" name="description" placeholder="Transaction description" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" required>
+            </div>
+            <div>
+                <label for="paid" class="block text-sm font-medium text-gray-700 mb-1">Amount Paid</label>
+                <input type="number" id="paid" name="paid" placeholder="0.00" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" min="0" step="0.01">
+            </div>
+            <div>
+                <label for="received" class="block text-sm font-medium text-gray-700 mb-1">Amount Received</label>
+                <input type="number" id="received" name="received" placeholder="0.00" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" min="0" step="0.01">
+            </div>
+            <div class="flex items-end">
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition-colors hover-lift">
+                    Add Transaction
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Transaction Summary Cards -->
+    {% set total_paid = data | selectattr('paid') | map(attribute='paid') | sum %}
+    {% set total_received = data | selectattr('received') | map(attribute='received') | sum %}
+    {% set total_interest = data | selectattr('interest') | map(attribute='interest') | sum %}
+    {% set final_outstanding = data[-1].outstanding if data else 0 %}
+    
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <div class="bg-blue-600 text-white rounded-xl shadow-md p-6 slide-up">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-blue-100 text-sm">Total Paid</p>
+                    <p class="text-2xl font-bold">{{ total_paid | format_currency }}</p>
+                </div>
+                <div class="text-blue-200">
+                    <svg class="h-8 w-8" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M8.433 7.418c.155-.103.346-.196.567-.267v1.698a2.305 2.305 0 01-.567-.267C8.07 8.34 8 8.114 8 8c0-.114.07-.34.433-.582zM11 12.849v-1.698c.22.071.412.164.567.267.364.243.433.468.433.582 0 .114-.07.34-.433.582a2.305 2.305 0 01-.567.267z"></path>
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.535 4.535 0 00-1.676.662C6.602 6.234 6 7.009 6 8c0 .99.602 1.765 1.324 2.246.48.32 1.054.545 1.676.662v1.941c-.391-.127-.68-.317-.843-.504a1 1 0 10-1.51 1.31c.562.649 1.413 1.076 2.353 1.253V15a1 1 0 102 0v-.092a4.535 4.535 0 001.676-.662C13.398 13.766 14 12.991 14 12c0-.99-.602-1.765-1.324-2.246A4.535 4.535 0 0011 9.092V7.151c.391.127.68.317.843.504a1 1 0 101.511-1.31c-.563-.649-1.413-1.076-2.354-1.253V5z" clip-rule="evenodd"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bg-green-600 text-white rounded-xl shadow-md p-6 slide-up" style="animation-delay: 0.1s">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-green-100 text-sm">Total Received</p>
+                    <p class="text-2xl font-bold">{{ total_received | format_currency }}</p>
+                </div>
+                <div class="text-green-200">
+                    <svg class="h-8 w-8" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M4 4a2 2 0 00-2 2v4a2 2 0 002 2V6h10a2 2 0 00-2-2H4zm2 6a2 2 0 012-2h8a2 2 0 012 2v4a2 2 0 01-2 2H8a2 2 0 01-2-2v-4zm6 4a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bg-purple-600 text-white rounded-xl shadow-md p-6 slide-up" style="animation-delay: 0.2s">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-purple-100 text-sm">Total Interest</p>
+                    <p class="text-2xl font-bold">{{ total_interest | format_currency }}</p>
+                </div>
+                <div class="text-purple-200">
+                    <svg class="h-8 w-8" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bg-orange-600 text-white rounded-xl shadow-md p-6 slide-up" style="animation-delay: 0.3s">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-orange-100 text-sm">Outstanding</p>
+                    <p class="text-2xl font-bold">{{ final_outstanding | format_currency }}</p>
+                </div>
+                <div class="text-orange-200">
+                    <svg class="h-8 w-8" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"></path>
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Transaction Table -->
+    <div class="bg-white rounded-xl shadow-md overflow-hidden slide-up">
+        <div class="px-6 py-4 border-b border-gray-200">
+            <div class="flex justify-between items-center">
+                <h2 class="text-xl font-semibold text-gray-900">Transaction History</h2>
+                <div class="flex space-x-2">
+                    <form method="POST" action="{{ url_for('delete_all_transactions', customer_id=customer.id) }}" onsubmit="return confirm('Are you sure you want to delete all transactions?');" class="inline">
+                        <button type="submit" class="text-red-600 hover:text-red-900 text-sm font-medium transition-colors">Clear All</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        
+        {% if data %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Paid</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Received</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Days</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Outstanding</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Interest</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">TDS</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Net</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for row in data %}
+                    <tr class="hover:bg-gray-50 transition-colors {% if row.get('isSummary') %}bg-blue-50 font-semibold{% endif %} {% if row.get('isOpening') %}bg-green-50{% endif %} {% if row.get('isMissing') %}bg-yellow-50{% endif %}">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.date | format_date }}</td>
+                        <td class="px-6 py-4 text-sm">
+                            {{ row.description }}
+                            {% if row.get('isSummary') %}
+                                <span class="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">Summary</span>
+                            {% endif %}
+                            {% if row.get('isOpening') %}
+                                <span class="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">Opening</span>
+                            {% endif %}
+                            {% if row.get('isMissing') %}
+                                <span class="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">Auto-Generated</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.paid | format_currency }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.received | format_currency }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.get('days', '') }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">{{ row.outstanding | format_currency }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.get('interest', '') | format_currency if row.get('interest') else '' }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.get('tds', '') | format_currency if row.get('tds') else '' }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.get('net', '') | format_currency if row.get('net') else '' }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">
+                            {% if not row.get('isSummary') and not row.get('isOpening') and not row.get('isMissing') %}
+                            <form method="POST" action="{{ url_for('delete_transaction', transaction_id=row.id) }}" onsubmit="return confirm('Are you sure?');" class="inline">
+                                <button type="submit" class="text-red-600 hover:text-red-900 transition-colors">Delete</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-12">
+            <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                <path d="M9 17v-2a4 4 0 118 0m-4 8V9a5 5 0 110 10v8a1 1 0 001 1h3m7-9v11a1 1 0 001 1h6a1 1 0 001-1V10a1 1 0 00-1-1h-6a1 1 0 00-1 1z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <h3 class="mt-2 text-sm font-medium text-gray-900">No transactions</h3>
+            <p class="mt-1 text-sm text-gray-500">Get started by adding your first transaction above.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
