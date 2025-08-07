@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% block title %}Add Customer{% endblock %}
+{% block content %}
+<h1 class="text-3xl font-bold text-gray-800 mb-6">Add New Customer</h1>
+<div class="bg-white p-8 rounded-xl shadow-md">
+    <form method="POST">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="md:col-span-2"><label for="name" class="block text-sm font-medium text-gray-700">Name</label><input type="text" name="name" id="name" class="mt-1 p-2 border rounded-md w-full" required></div>
+            <div class="md:col-span-2"><label for="address" class="block text-sm font-medium text-gray-700">Address</label><textarea name="address" id="address" rows="3" class="mt-1 p-2 border rounded-md w-full"></textarea></div>
+            <div><label for="icl_start_date" class="block text-sm font-medium text-gray-700">ICL Start Date</label><input type="date" name="icl_start_date" id="icl_start_date" class="mt-1 p-2 border rounded-md w-full" required></div>
+            <div><label for="interest_rate" class="block text-sm font-medium text-gray-700">Interest Rate (%)</label><input type="number" name="interest_rate" id="interest_rate" value="12.0" step="0.01" class="mt-1 p-2 border rounded-md w-full" required></div>
+            <div><label for="tds_rate" class="block text-sm font-medium text-gray-700">TDS Rate (%)</label><input type="number" name="tds_rate" id="tds_rate" value="10.0" step="0.01" class="mt-1 p-2 border rounded-md w-full" required></div>
+            <div><label for="interest_type" class="block text-sm font-medium text-gray-700">Interest Type</label><select name="interest_type" id="interest_type" class="mt-1 p-2 border rounded-md w-full"><option value="compound">Compound</option><option value="simple">Simple</option></select></div>
+            <div><label for="frequency" class="block text-sm font-medium text-gray-700">Frequency</label><select name="frequency" id="frequency" class="mt-1 p-2 border rounded-md w-full"><option value="quarterly">Quarterly</option><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select></div>
+        </div>
+        <div class="mt-6"><button type="submit" class="bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg hover:bg-blue-700">Add Customer</button></div>
+    </form>
+</div>
+{% endblock %}
