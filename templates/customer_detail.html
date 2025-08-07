@@ -35,7 +35,30 @@
     <!-- Customer Settings -->
     <div class="bg-white rounded-xl shadow-md p-6 mb-8 slide-up">
         <h2 class="text-xl font-semibold text-gray-900 mb-4">Loan Settings</h2>
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-6">
+        
+        <!-- Loan Status Banner -->
+        <div class="mb-6 p-4 rounded-lg {% if customer.status == 'active' %}bg-green-100 border border-green-300{% elif customer.status == 'overdue' %}bg-yellow-100 border border-yellow-300{% elif customer.status == 'npa' %}bg-red-100 border border-red-300{% elif customer.status == 'closed' %}bg-gray-100 border border-gray-300{% endif %}">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <span class="text-lg font-bold {% if customer.status == 'active' %}text-green-700{% elif customer.status == 'overdue' %}text-yellow-700{% elif customer.status == 'npa' %}text-red-700{% elif customer.status == 'closed' %}text-gray-700{% endif %}">
+                        Status: {{ customer.status | upper }}
+                    </span>
+                    {% if customer.overdue_days > 0 %}
+                        <span class="bg-red-500 text-white px-2 py-1 rounded-full text-sm">{{ customer.overdue_days }} days overdue</span>
+                    {% endif %}
+                </div>
+                {% if customer.status != 'closed' %}
+                    <button onclick="showCloseLoanModal()" class="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+                        Close Loan
+                    </button>
+                {% endif %}
+            </div>
+            {% if customer.closure_date %}
+                <p class="text-sm text-gray-600 mt-2">Closed on: {{ customer.closure_date | format_date }}</p>
+            {% endif %}
+        </div>
+        
+        <div class="grid grid-cols-2 md:grid-cols-7 gap-6">
             <div class="text-center">
                 <div class="text-2xl font-bold text-blue-600">{{ customer.icl_start_date | format_date }}</div>
                 <div class="text-sm text-gray-500">ICL Start Date</div>
@@ -53,6 +76,14 @@
             <div class="text-center">
                 <div class="text-2xl font-bold text-red-600">{{ customer.tds_rate }}%</div>
                 <div class="text-sm text-gray-500">TDS Rate</div>
+            </div>
+            <div class="text-center">
+                <div class="text-2xl font-bold text-orange-600">{{ customer.penalty_rate }}%</div>
+                <div class="text-sm text-gray-500">Penalty Rate</div>
+            </div>
+            <div class="text-center">
+                <div class="text-2xl font-bold text-indigo-600">{{ customer.grace_period }}</div>
+                <div class="text-sm text-gray-500">Grace Days</div>
             </div>
             <div class="text-center">
                 <div class="text-2xl font-bold text-purple-600">{{ customer.frequency | capitalize }}</div>
@@ -179,6 +210,7 @@
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Days</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Outstanding</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Interest</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Penalty</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">TDS</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Net</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
@@ -186,7 +218,7 @@
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
                     {% for row in data %}
-                    <tr class="hover:bg-gray-50 transition-colors {% if row.get('isSummary') %}bg-blue-50 font-semibold{% endif %} {% if row.get('isOpening') %}bg-green-50{% endif %} {% if row.get('isMissing') %}bg-yellow-50{% endif %}">
+                    <tr class="hover:bg-gray-50 transition-colors {% if row.get('isSummary') %}bg-blue-50 font-semibold{% endif %} {% if row.get('isOpening') %}bg-green-50{% endif %} {% if row.get('isMissing') %}bg-yellow-50{% endif %} {% if row.get('is_overdue') %}bg-red-50{% endif %}">
                         <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.date | format_date }}</td>
                         <td class="px-6 py-4 text-sm">
                             {{ row.description }}
@@ -199,12 +231,18 @@
                             {% if row.get('isMissing') %}
                                 <span class="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">Auto-Generated</span>
                             {% endif %}
+                            {% if row.get('is_overdue') %}
+                                <span class="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">Overdue</span>
+                            {% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.paid | format_currency }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.received | format_currency }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.get('days', '') }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">{{ row.outstanding | format_currency }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.get('interest', '') | format_currency if row.get('interest') else '' }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm {% if row.get('penalty_interest') and row.get('penalty_interest') > 0 %}text-red-600 font-medium{% endif %}">
+                            {{ row.get('penalty_interest', '') | format_currency if row.get('penalty_interest') else '' }}
+                        </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.get('tds', '') | format_currency if row.get('tds') else '' }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.get('net', '') | format_currency if row.get('net') else '' }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">
@@ -230,4 +268,50 @@
         {% endif %}
     </div>
 </div>
+
+<!-- Loan Closure Modal -->
+<div id="closeLoanModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden">
+    <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+        <div class="mt-3">
+            <h3 class="text-lg font-medium text-gray-900 mb-4">Close Loan</h3>
+            <form method="POST" action="{{ url_for('close_loan', customer_id=customer.id) }}">
+                <div class="mb-4">
+                    <label for="closure_date" class="block text-sm font-medium text-gray-700 mb-2">Closure Date</label>
+                    <input type="date" id="closure_date" name="closure_date" value="{{ datetime.now().strftime('%Y-%m-%d') }}" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" required>
+                </div>
+                <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+                    <p class="text-sm text-yellow-800">
+                        <strong>Warning:</strong> This action will permanently close the loan account. 
+                        All outstanding amounts including penalties will be calculated and settled.
+                    </p>
+                </div>
+                <div class="flex space-x-4">
+                    <button type="submit" class="flex-1 bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+                        Close Loan
+                    </button>
+                    <button type="button" onclick="hideCloseLoanModal()" class="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors">
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function showCloseLoanModal() {
+    document.getElementById('closeLoanModal').classList.remove('hidden');
+}
+
+function hideCloseLoanModal() {
+    document.getElementById('closeLoanModal').classList.add('hidden');
+}
+
+// Hide modal when clicking outside
+document.getElementById('closeLoanModal').addEventListener('click', function(event) {
+    if (event.target === this) {
+        hideCloseLoanModal();
+    }
+});
+</script>
 {% endblock %}
