@@ -1,4 +1,3 @@
-
 {% extends 'base.html' %}
 {% block title %}Customers - ICL Calculator{% endblock %}
 {% block content %}
@@ -24,7 +23,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="bg-white rounded-xl shadow-md p-6 card-hover slide-up" style="animation-delay: 0.1s">
             <div class="flex items-center">
                 <div class="p-3 rounded-full bg-green-100">
@@ -38,7 +37,7 @@
                 </div>
             </div>
         </div>
-        
+
         <div class="bg-white rounded-xl shadow-md p-6 card-hover slide-up" style="animation-delay: 0.2s">
             <div class="flex items-center">
                 <div class="p-3 rounded-full bg-orange-100">
@@ -54,11 +53,50 @@
         </div>
     </div>
 
+    <!-- Search, Filter and Sort Controls -->
+    <div class="bg-white rounded-xl shadow-md p-6 mb-6 slide-up">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div>
+                <label for="searchInput" class="block text-sm font-medium text-gray-700 mb-1">Search Customers</label>
+                <input type="text" id="searchInput" placeholder="Search by name or address..." class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+            </div>
+            <div>
+                <label for="statusFilter" class="block text-sm font-medium text-gray-700 mb-1">Filter by Status</label>
+                <select id="statusFilter" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+                    <option value="">All Status</option>
+                    <option value="active">Active</option>
+                    <option value="overdue">Overdue</option>
+                    <option value="npa">NPA</option>
+                    <option value="closed">Closed</option>
+                </select>
+            </div>
+            <div>
+                <label for="interestTypeFilter" class="block text-sm font-medium text-gray-700 mb-1">Filter by Interest Type</label>
+                <select id="interestTypeFilter" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+                    <option value="">All Types</option>
+                    <option value="simple">Simple Interest</option>
+                    <option value="compound">Compound Interest</option>
+                </select>
+            </div>
+            <div>
+                <label for="sortBy" class="block text-sm font-medium text-gray-700 mb-1">Sort By</label>
+                <select id="sortBy" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+                    <option value="name">Name (A-Z)</option>
+                    <option value="name-desc">Name (Z-A)</option>
+                    <option value="start-date">ICL Start Date (Newest)</option>
+                    <option value="start-date-desc">ICL Start Date (Oldest)</option>
+                    <option value="interest-rate">Interest Rate (Low to High)</option>
+                    <option value="interest-rate-desc">Interest Rate (High to Low)</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
     <!-- Add Customer Button -->
     <div class="flex justify-between items-center mb-6">
         <div>
             <h2 class="text-xl font-semibold text-gray-900">All Customers</h2>
-            <p class="text-sm text-gray-500">{{ customers|length }} customer{{ 's' if customers|length != 1 else '' }} found</p>
+            <p class="text-sm text-gray-500"><span id="customerCount">{{ customers|length }}</span> customer<span id="customerPlural">{{ 's' if customers|length != 1 else '' }}</span> found</p>
         </div>
         <a href="{{ url_for('add_customer') }}" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors hover-lift">
             <svg class="h-5 w-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -75,17 +113,30 @@
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ICL Period</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Interest Rate</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">TDS Rate</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onclick="sortTable('customer_id')">Customer ID <span class="sort-indicator"></span></th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onclick="sortTable('name')">Name <span class="sort-indicator"></span></th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onclick="sortTable('start-date')">ICL Period <span class="sort-indicator"></span></th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onclick="sortTable('interest-rate')">Interest Rate <span class="sort-indicator"></span></th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onclick="sortTable('tds-rate')">TDS Rate <span class="sort-indicator"></span></th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100" onclick="sortTable('status')">Status <span class="sort-indicator"></span></th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                     </tr>
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
                     {% for customer in customers %}
-                    <tr class="hover:bg-gray-50 transition-colors duration-150">
+                    <tr class="customer-row hover:bg-gray-50 transition-colors duration-150" 
+                        data-name="{{ customer.name.lower() }}" 
+                        data-address="{{ customer.address.lower() if customer.address else '' }}"
+                        data-status="{{ customer.status }}"
+                        data-interest-type="{{ customer.interest_type }}"
+                        data-interest-rate="{{ customer.interest_rate }}"
+                        data-tds-rate="{{ customer.tds_rate }}"
+                        data-start-date="{{ customer.icl_start_date.strftime('%Y-%m-%d') }}"
+                        data-start-date-display="{{ customer.icl_start_date | format_date }}"
+                        data-customer-id="{{ customer.customer_id if customer.customer_id else '' }}">
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="text-sm font-medium text-gray-900">{{ customer.customer_id if customer.customer_id else 'N/A' }}</div>
+                        </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             <div class="flex items-center">
                                 <div class="h-12 w-12 flex-shrink-0">
@@ -94,7 +145,7 @@
                                     </div>
                                 </div>
                                 <div class="ml-4">
-                                    
+
                                     <a href="{{ url_for('customer_detail', customer_id=customer.id) }}" class="text-blue-600 hover:text-blue-900 transition-colors">{{ customer.name }}</a>
                                     <div class="text-sm text-gray-500">{{ customer.address[:40] }}{% if customer.address|length > 40 %}...{% endif %}</div>
                                 </div>
@@ -175,4 +226,134 @@
         {% endif %}
     </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.getElementById('searchInput');
+    const statusFilter = document.getElementById('statusFilter');
+    const interestTypeFilter = document.getElementById('interestTypeFilter');
+    const sortBy = document.getElementById('sortBy');
+    const customerRows = document.querySelectorAll('.customer-row');
+    const customerCount = document.getElementById('customerCount');
+    const customerPlural = document.getElementById('customerPlural');
+
+    // Search functionality
+    searchInput.addEventListener('input', filterAndSort);
+    statusFilter.addEventListener('change', filterAndSort);
+    interestTypeFilter.addEventListener('change', filterAndSort);
+    sortBy.addEventListener('change', filterAndSort);
+
+    function filterAndSort() {
+        const searchTerm = searchInput.value.toLowerCase();
+        const statusValue = statusFilter.value;
+        const interestTypeValue = interestTypeFilter.value;
+        const sortValue = sortBy.value;
+
+        let visibleRows = [];
+
+        // Filter rows
+        customerRows.forEach(row => {
+            const name = row.dataset.name;
+            const address = row.dataset.address;
+            const status = row.dataset.status;
+            const interestType = row.dataset.interestType;
+            const customerId = row.dataset.customerId;
+
+            const matchesSearch = name.includes(searchTerm) || address.includes(searchTerm) || (customerId && customerId.includes(searchTerm));
+            const matchesStatus = !statusValue || status === statusValue;
+            const matchesInterestType = !interestTypeValue || interestType === interestTypeValue;
+
+            if (matchesSearch && matchesStatus && matchesInterestType) {
+                row.style.display = '';
+                visibleRows.push(row);
+            } else {
+                row.style.display = 'none';
+            }
+        });
+
+        // Sort visible rows
+        sortRows(visibleRows, sortValue);
+
+        // Update count
+        updateCustomerCount(visibleRows.length);
+    }
+
+    function sortRows(rows, sortBy) {
+        const tbody = document.querySelector('.customer-row').parentNode;
+
+        rows.sort((a, b) => {
+            let aValue, bValue;
+
+            switch(sortBy) {
+                case 'customer_id':
+                    return (a.dataset.customerId || '').localeCompare(b.dataset.customerId || '');
+                case 'customer_id-desc':
+                    return (b.dataset.customerId || '').localeCompare(a.dataset.customerId || '');
+                case 'name':
+                    return a.dataset.name.localeCompare(b.dataset.name);
+                case 'name-desc':
+                    return b.dataset.name.localeCompare(a.dataset.name);
+                case 'start-date':
+                    return new Date(b.dataset.startDate) - new Date(a.dataset.startDate);
+                case 'start-date-desc':
+                    return new Date(a.dataset.startDate) - new Date(b.dataset.startDate);
+                case 'interest-rate':
+                    return parseFloat(a.dataset.interestRate) - parseFloat(b.dataset.interestRate);
+                case 'interest-rate-desc':
+                    return parseFloat(b.dataset.interestRate) - parseFloat(a.dataset.interestRate);
+                case 'tds-rate':
+                    return parseFloat(a.dataset.tdsRate) - parseFloat(b.dataset.tdsRate);
+                case 'tds-rate-desc':
+                    return parseFloat(b.dataset.tdsRate) - parseFloat(a.dataset.tdsRate);
+                case 'status':
+                    return a.dataset.status.localeCompare(b.dataset.status);
+                case 'status-desc':
+                    return b.dataset.status.localeCompare(a.dataset.status);
+                default:
+                    return 0;
+            }
+        });
+
+        // Re-append sorted rows
+        rows.forEach(row => tbody.appendChild(row));
+    }
+
+    function updateCustomerCount(count) {
+        customerCount.textContent = count;
+        customerPlural.textContent = count !== 1 ? 's' : '';
+    }
+
+    // Table header sorting
+    window.sortTable = function(column) {
+        const currentSort = sortBy.value;
+        let newSort = column;
+
+        // Toggle sort direction if same column
+        if (currentSort === column) {
+            newSort = column + '-desc';
+        } else if (currentSort === column + '-desc') {
+            newSort = column;
+        }
+
+        sortBy.value = newSort;
+        filterAndSort();
+
+        // Update sort indicators
+        document.querySelectorAll('.sort-indicator').forEach(indicator => {
+            indicator.textContent = '';
+        });
+
+        // Find the target th and add the indicator
+        const thElements = document.querySelectorAll('th');
+        thElements.forEach(th => {
+            if (th.getAttribute('onclick') && th.getAttribute('onclick').includes(column)) {
+                const indicator = th.querySelector('.sort-indicator');
+                if (indicator) {
+                    indicator.textContent = newSort.includes('-desc') ? ' ↓' : ' ↑';
+                }
+            }
+        });
+    };
+});
+</script>
 {% endblock %}
