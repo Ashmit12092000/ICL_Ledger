@@ -247,6 +247,7 @@ def calculate_simple_interest_data(customer, settings):
                 'isSummary': True,
                 'isMissing': True,
                 'outstanding': outstanding_balance + quarter_net,
+                'principal_balance': principal_bal,
                 'interest': quarter_interest,
                 'tds': quarter_interest - quarter_net,
                 'net': quarter_net,
@@ -273,7 +274,16 @@ def calculate_simple_interest_data(customer, settings):
         if is_first_tx_in_quarter:
             # Close previous quarter
             running_outstanding += current_quarter_net_interest
-            timeline.append({'id': f"summary-{last_quarter_info['name']}",'date': last_quarter_info['endDate'],'description': f"{last_quarter_info['name']} Net Interest",'paid': current_quarter_net_interest, 'received': Decimal('0'), 'isSummary': True,'outstanding': running_outstanding})
+            timeline.append({
+                'id': f"summary-{last_quarter_info['name']}",
+                'date': last_quarter_info['endDate'],
+                'description': f"{last_quarter_info['name']} Net Interest",
+                'paid': current_quarter_net_interest, 
+                'received': Decimal('0'), 
+                'isSummary': True,
+                'outstanding': running_outstanding,
+                'principal_balance': principal_balance
+            })
 
             # Add missing quarters if any
             running_outstanding = add_missing_quarters(last_quarter_info, tx_quarter_info, running_outstanding, principal_balance)
@@ -289,7 +299,19 @@ def calculate_simple_interest_data(customer, settings):
             interest_opening = (principal_balance * (settings['interestRate'] / Decimal('100')) * Decimal(days_opening)) / Decimal(days_in_year_opening)
             net_opening = interest_opening * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
 
-            timeline.append({'id': f"opening-{tx_quarter_info['name']}",'date': tx_quarter_info['startDate'],'description': 'Opening Balance','paid': Decimal('0'), 'received': Decimal('0'), 'isOpening': True,'outstanding': running_outstanding,'interest': interest_opening,'tds': interest_opening - net_opening,'net': net_opening})
+            timeline.append({
+                'id': f"opening-{tx_quarter_info['name']}",
+                'date': tx_quarter_info['startDate'],
+                'description': 'Opening Balance',
+                'paid': Decimal('0'), 
+                'received': Decimal('0'), 
+                'isOpening': True,
+                'outstanding': running_outstanding,
+                'principal_balance': principal_balance,
+                'interest': interest_opening,
+                'tds': interest_opening - net_opening,
+                'net': net_opening
+            })
 
             current_quarter_net_interest = net_opening
             last_quarter_info = tx_quarter_info
@@ -384,6 +406,7 @@ def calculate_simple_interest_data(customer, settings):
             'net': net, 
             'tds': total_interest - net, 
             'outstanding': outstanding_for_this_row,
+            'principal_balance': principal_balance,
             'is_overdue': customer.icl_end_date and tx_date > customer.icl_end_date
         })
         running_outstanding = outstanding_for_this_row
@@ -391,7 +414,16 @@ def calculate_simple_interest_data(customer, settings):
     final_outstanding = running_outstanding + current_quarter_net_interest
     last_tx_date = sorted_txs[-1].date
     last_tx_quarter_info = get_quarter_info(last_tx_date, customer.icl_start_date)
-    timeline.append({'id': f"summary-{last_tx_quarter_info['name']}",'date': last_tx_quarter_info['endDate'],'description': f"{last_tx_quarter_info['name']} Net Interest",'paid': current_quarter_net_interest, 'received': Decimal('0'), 'isSummary': True,'outstanding': final_outstanding})
+    timeline.append({
+        'id': f"summary-{last_tx_quarter_info['name']}",
+        'date': last_tx_quarter_info['endDate'],
+        'description': f"{last_tx_quarter_info['name']} Net Interest",
+        'paid': current_quarter_net_interest, 
+        'received': Decimal('0'), 
+        'isSummary': True,
+        'outstanding': final_outstanding,
+        'principal_balance': principal_balance
+    })
 
     return timeline
 
