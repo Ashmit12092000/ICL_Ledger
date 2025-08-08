@@ -77,6 +77,12 @@ def format_currency_filter(num):
     except (ValueError, TypeError):
         return '₹ 0.00'
 
+# --- Template Functions ---
+@app.template_global()
+def calculate_data_global(customer):
+    """Make calculate_data available in templates"""
+    return calculate_data(customer)
+
 # --- Authentication Functions ---
 def login_required(f):
     @wraps(f)
@@ -112,6 +118,60 @@ def get_current_user():
     return None
 
 # --- Helper Functions ---
+def calculate_dashboard_stats(customers):
+    """Calculate dashboard statistics"""
+    active_loans = 0
+    total_outstanding = Decimal('0')
+    this_month_interest = Decimal('0')
+    
+    current_date = datetime.now().date()
+    current_month_start = datetime(current_date.year, current_date.month, 1).date()
+    
+    for customer in customers:
+        # Count active loans (not closed)
+        if customer.status != 'closed':
+            active_loans += 1
+        
+        # Calculate outstanding balance
+        if customer.transactions:
+            calculated_data = calculate_data(customer)
+            if calculated_data:
+                # Get the final outstanding balance
+                final_outstanding = calculated_data[-1]['outstanding']
+                total_outstanding += final_outstanding
+                
+                # Calculate this month's interest
+                for entry in calculated_data:
+                    if (entry['date'] >= current_month_start and 
+                        entry['date'] <= current_date and 
+                        entry.get('net')):
+                        this_month_interest += entry['net']
+    
+    return {
+        'active_loans': active_loans,
+        'total_outstanding': total_outstanding,
+        'this_month_interest': this_month_interest
+    }
+
+def get_recent_transactions_with_customer_names():
+    """Get recent transactions with customer names"""
+    recent_txs = db.session.query(Transaction, Customer.name).join(
+        Customer, Transaction.customer_id == Customer.id
+    ).order_by(Transaction.date.desc()).limit(5).all()
+    
+    transactions = []
+    for tx, customer_name in recent_txs:
+        transactions.append({
+            'id': tx.id,
+            'date': tx.date,
+            'description': tx.description,
+            'paid': Decimal(str(tx.paid)),
+            'received': Decimal(str(tx.received)),
+            'customer_name': customer_name
+        })
+    
+    return transactions
+
 def get_quarter_info(date_obj, start_date_obj):
     months_diff = (date_obj.year - start_date_obj.year) * 12 + (date_obj.month - start_date_obj.month)
     quarter_index = months_diff // 3
@@ -1844,10 +1904,53 @@ def calculate_yearly_compound_interest_data(customer, settings):
         })
         running_outstanding = outstanding_for_this_row
 
+    # Close the current financial year
     final_outstanding = running_outstanding + current_year_net_interest
     last_tx_date = sorted_txs[-1].date
     last_tx_year_info = get_financial_year_info(last_tx_date, customer.icl_start_date)
+    
     timeline.append({'id': f"summary-{last_tx_year_info['name']}",'date': last_tx_year_info['endDate'],'description': f"{last_tx_year_info['name']} Net Interest",'paid': current_year_net_interest, 'received': Decimal('0'), 'isSummary': True,'outstanding': final_outstanding})
+
+    # Check if ICL end date extends beyond the current financial year
+    if customer.icl_end_date and customer.icl_end_date > last_tx_year_info['endDate']:
+        # Calculate interest for the remaining period from financial year end to ICL end date
+        remaining_period_start = last_tx_year_info['endDate'] + timedelta(days=1)
+        remaining_period_end = customer.icl_end_date
+        remaining_days = (remaining_period_end - remaining_period_start).days + 1
+        
+        if remaining_days > 0:
+            settings = {
+                'interestRate': Decimal(customer.interest_rate),
+                'tdsRate': Decimal(customer.tds_rate)
+            }
+            
+            # Calculate days in year for the remaining period
+            days_in_year = 365
+            if is_leap(remaining_period_start.year):
+                # Check if the remaining period includes Feb 29
+                feb_29 = datetime(remaining_period_start.year, 2, 29).date()
+                if remaining_period_start <= feb_29 <= remaining_period_end:
+                    days_in_year = 366
+            
+            remaining_interest = (final_outstanding * (settings['interestRate'] / Decimal('100')) * Decimal(remaining_days)) / Decimal(days_in_year)
+            remaining_net = remaining_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+            
+            # Add the remaining period entry
+            timeline.append({
+                'id': f"remaining-period-{remaining_period_end.strftime('%Y-%m-%d')}",
+                'date': remaining_period_end,
+                'description': f"Remaining Period Interest (to ICL End Date)",
+                'paid': remaining_net,
+                'received': Decimal('0'),
+                'isSummary': True,
+                'outstanding': final_outstanding + remaining_net,
+                'interest': remaining_interest,
+                'tds': remaining_interest - remaining_net,
+                'net': remaining_net,
+                'days': remaining_days
+            })
+            
+            final_outstanding += remaining_net
 
     return timeline
 
@@ -1858,7 +1961,18 @@ def calculate_yearly_compound_interest_data(customer, settings):
 def index():
     customers = Customer.query.all()
     current_user = get_current_user()
-    return render_template('index.html', customers=customers, current_user=current_user)
+    
+    # Calculate dashboard statistics
+    dashboard_stats = calculate_dashboard_stats(customers)
+    
+    # Get recent transactions (last 5)
+    recent_transactions = get_recent_transactions_with_customer_names()
+    
+    return render_template('dashboard.html', 
+                         customers=customers, 
+                         current_user=current_user,
+                         dashboard_stats=dashboard_stats,
+                         recent_transactions=recent_transactions)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -2051,6 +2165,39 @@ def add_transaction(customer_id):
     flash('Transaction added successfully!', 'success')
     return redirect(url_for('customer_detail', customer_id=customer.id))
 
+@app.route('/edit_transaction/<int:transaction_id>', methods=['GET', 'POST'])
+@admin_required
+def edit_transaction(transaction_id):
+    tx = Transaction.query.get_or_404(transaction_id)
+    customer = Customer.query.get_or_404(tx.customer_id)
+    
+    if request.method == 'POST':
+        # Store old values for logging
+        old_date = tx.date
+        old_description = tx.description
+        old_paid = tx.paid
+        old_received = tx.received
+        
+        # Update transaction
+        new_date = datetime.strptime(request.form['date'], '%Y-%m-%d').date()
+        
+        # Check if transaction date is beyond ICL end date
+        if customer.icl_end_date and new_date > customer.icl_end_date:
+            flash(f'Transaction date cannot be beyond the ICL end date ({customer.icl_end_date.strftime("%d/%m/%Y")})', 'error')
+            return redirect(url_for('edit_transaction', transaction_id=transaction_id))
+        
+        tx.date = new_date
+        tx.description = request.form['description']
+        tx.paid = float(request.form.get('paid', 0) or 0)
+        tx.received = float(request.form.get('received', 0) or 0)
+        
+        db.session.commit()
+        flash(f'Transaction updated successfully! All calculations have been recalculated.', 'success')
+        return redirect(url_for('customer_detail', customer_id=customer.id))
+    
+    current_user = get_current_user()
+    return render_template('edit_transaction.html', transaction=tx, customer=customer, current_user=current_user)
+
 @app.route('/delete_transaction/<int:transaction_id>', methods=['POST'])
 def delete_transaction(transaction_id):
     tx = Transaction.query.get_or_404(transaction_id)
@@ -2161,6 +2308,121 @@ def calculate_settlement_amount(customer, closure_date):
         'net_additional': net_additional,
         'total_settlement': total_settlement
     }
+
+@app.route('/reports')
+@login_required
+def reports():
+    """Main reports page"""
+    current_user = get_current_user()
+    return render_template('reports.html', current_user=current_user)
+
+@app.route('/reports/customer-wise', methods=['GET', 'POST'])
+@login_required
+def customer_wise_report():
+    """Customer wise report"""
+    customers = Customer.query.all()
+    report_data = None
+    selected_customer = None
+    
+    if request.method == 'POST':
+        customer_id = request.form.get('customer_id')
+        if customer_id:
+            selected_customer = Customer.query.get(int(customer_id))
+            if selected_customer:
+                calculated_data = calculate_data(selected_customer)
+                current_balance = Decimal('0')
+                if calculated_data:
+                    current_balance = calculated_data[-1]['outstanding']
+                
+                report_data = {
+                    'customer': selected_customer,
+                    'current_balance': current_balance,
+                    'calculated_data': calculated_data
+                }
+    
+    current_user = get_current_user()
+    return render_template('customer_wise_report.html', 
+                         customers=customers, 
+                         report_data=report_data,
+                         selected_customer=selected_customer,
+                         current_user=current_user,datetime=datetime)
+
+@app.route('/reports/period-based', methods=['GET', 'POST'])
+@login_required
+def period_based_report():
+    """Period based report for all customers"""
+    report_data = []
+    start_date = None
+    end_date = None
+    
+    if request.method == 'POST':
+        start_date_str = request.form.get('start_date')
+        end_date_str = request.form.get('end_date')
+        
+        if start_date_str and end_date_str:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+            
+            customers = Customer.query.all()
+            
+            for customer in customers:
+                # Calculate totals for the period
+                total_given = Decimal('0')
+                total_repaid = Decimal('0')
+                period_interest = Decimal('0')
+                period_tds = Decimal('0')
+                principal_balance = Decimal('0')
+                
+                # Get all transactions in the period
+                period_transactions = Transaction.query.filter(
+                    Transaction.customer_id == customer.id,
+                    Transaction.date >= start_date,
+                    Transaction.date <= end_date
+                ).all()
+                
+                for tx in period_transactions:
+                    total_given += Decimal(str(tx.paid))
+                    total_repaid += Decimal(str(tx.received))
+                
+                # Calculate interest for the period using the calculation engine
+                calculated_data = calculate_data(customer)
+                
+                for entry in calculated_data:
+                    if start_date <= entry['date'] <= end_date:
+                        if entry.get('interest'):
+                            period_interest += entry['interest']
+                        if entry.get('tds'):
+                            period_tds += entry['tds']
+                
+                # Get current principal balance (total given - total repaid overall)
+                all_transactions = Transaction.query.filter_by(customer_id=customer.id).all()
+                total_given_overall = sum(Decimal(str(tx.paid)) for tx in all_transactions)
+                total_repaid_overall = sum(Decimal(str(tx.received)) for tx in all_transactions)
+                principal_balance = total_given_overall - total_repaid_overall
+                
+                # Calculate net amount (Principal + Interest - TDS)
+                net_amount = principal_balance + period_interest - period_tds
+                
+                report_data.append({
+                    'icl_manual_no': f"ICL-{customer.id:04d}",
+                    'customer_name': customer.name,
+                    'icl_start_date': customer.icl_start_date,
+                    'icl_end_date': customer.icl_end_date,
+                    'interest_rate': customer.interest_rate,
+                    'total_given': total_given,
+                    'total_repaid': total_repaid,
+                    'principal_balance': principal_balance,
+                    'period_interest': period_interest,
+                    'period_tds': period_tds,
+                    'net_amount': net_amount
+                })
+    
+    current_user = get_current_user()
+    return render_template('period_based_report.html',
+                         report_data=report_data,
+                         start_date=start_date,
+                         end_date=end_date,
+                         current_user=current_user)
 
 @app.route('/customer/<int:customer_id>/balance_calculator', methods=['GET', 'POST'])
 def calculate_balance(customer_id):
