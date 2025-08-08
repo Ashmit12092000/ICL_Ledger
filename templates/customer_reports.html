@@ -1,4 +1,3 @@
-
 {% extends 'base.html' %}
 {% block title %}{{ customer.name }} - Reports{% endblock %}
 {% block content %}
@@ -34,48 +33,130 @@
     {% set total_tds = data | selectattr('tds') | map(attribute='tds') | sum %}
     {% set final_outstanding = data[-1].outstanding if data else 0 %}
     {% set net_flow = total_received - total_paid %}
-    
+
     <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6 mb-8">
         <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up">
-            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-blue-600 break-words overflow-hidden">{{ total_paid | format_currency }}</div>
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-blue-600 break-words overflow-visible">{{ total_paid | format_currency }}</div>
             <div class="text-sm text-gray-500 mt-1">Total Paid</div>
             <div class="mt-2 text-xs {% if total_paid > 0 %}text-green-600{% else %}text-gray-400{% endif %}">
                 {% if total_paid > 0 %}+{{ ((total_paid / (total_paid + total_received)) * 100) | round(1) }}%{% else %}No data{% endif %}
             </div>
         </div>
-        
+
         <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up" style="animation-delay: 0.1s">
-            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-green-600 break-words overflow-hidden">{{ total_received | format_currency }}</div>
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-green-600 break-words overflow-visible">{{ total_received | format_currency }}</div>
             <div class="text-sm text-gray-500 mt-1">Total Received</div>
             <div class="mt-2 text-xs {% if total_received > 0 %}text-green-600{% else %}text-gray-400{% endif %}">
                 {% if total_received > 0 %}+{{ ((total_received / (total_paid + total_received)) * 100) | round(1) }}%{% else %}No data{% endif %}
             </div>
         </div>
-        
+
         <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up" style="animation-delay: 0.2s">
-            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-purple-600 break-words overflow-hidden">{{ total_net_interest | format_currency }}</div>
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-purple-600 break-words overflow-visible">{{ total_net_interest | format_currency }}</div>
             <div class="text-sm text-gray-500 mt-1">Total Net Interest</div>
             <div class="mt-2 text-xs text-blue-600">{{ customer.interest_rate }}% rate</div>
         </div>
-        
+
         <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up" style="animation-delay: 0.3s">
-            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-red-600 break-words overflow-hidden">{{ total_tds | format_currency }}</div>
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-red-600 break-words overflow-visible">{{ total_tds | format_currency }}</div>
             <div class="text-sm text-gray-500 mt-1">Total TDS</div>
             <div class="mt-2 text-xs text-red-600">{{ customer.tds_rate }}% deducted</div>
         </div>
-        
+
         <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up" style="animation-delay: 0.4s">
-            <div class="text-lg sm:text-xl lg:text-2xl font-bold {% if net_flow >= 0 %}text-green-600{% else %}text-red-600{% endif %} break-words overflow-hidden">{{ net_flow | format_currency }}</div>
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold {% if net_flow >= 0 %}text-green-600{% else %}text-red-600{% endif %} break-words overflow-visible">{{ net_flow | format_currency }}</div>
             <div class="text-sm text-gray-500 mt-1">Net Cash Flow</div>
             <div class="mt-2 text-xs {% if net_flow >= 0 %}text-green-600{% else %}text-red-600{% endif %}">
                 {% if net_flow >= 0 %}Positive{% else %}Negative{% endif %}
             </div>
         </div>
-        
+
         <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up" style="animation-delay: 0.5s">
-            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-orange-600 break-words overflow-hidden">{{ final_outstanding | format_currency }}</div>
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-orange-600 break-words overflow-visible">{{ final_outstanding | format_currency }}</div>
             <div class="text-sm text-gray-500 mt-1">Outstanding</div>
             <div class="mt-2 text-xs text-orange-600">Current balance</div>
+        </div>
+    </div>
+    <div class="bg-white rounded-xl shadow-md p-6 mb-8 slide-up">
+        <h3 class="text-xl font-semibold text-gray-900 mb-4">Transaction Summary</h3>
+
+        <!-- Period Selection Buttons -->
+        <div class="flex justify-center mb-6">
+            <div class="inline-flex rounded-lg bg-gray-100 p-1">
+                <button id="quarterly-btn" onclick="showTransactionSummary('quarterly')" 
+                        class="px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white shadow-sm">
+                    Quarterly
+                </button>
+                <button id="halfyearly-btn" onclick="showTransactionSummary('halfyearly')" 
+                        class="px-4 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900">
+                    Half-Yearly
+                </button>
+                <button id="yearly-btn" onclick="showTransactionSummary('yearly')" 
+                        class="px-4 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900">
+                    Yearly
+                </button>
+            </div>
+        </div>
+
+        <!-- Summary Tables -->
+        <div id="quarterly-summary" class="transaction-summary-table">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quarter</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount Paid</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount Received</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Interest</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">TDS</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Net Interest</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Outstanding</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200" id="quarterly-tbody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="halfyearly-summary" class="transaction-summary-table hidden">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Half-Year</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount Paid</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount Received</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Interest</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">TDS</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Net Interest</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Outstanding</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200" id="halfyearly-tbody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="yearly-summary" class="transaction-summary-table hidden">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Year</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount Paid</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount Received</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Interest</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">TDS</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Net Interest</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Outstanding</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200" id="yearly-tbody">
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
@@ -88,7 +169,7 @@
                 <canvas id="cashFlowChart"></canvas>
             </div>
         </div>
-        
+
         <!-- Interest vs Principal Chart -->
         <div class="bg-white rounded-xl shadow-md p-6 slide-up">
             <h3 class="text-xl font-semibold text-gray-900 mb-4">Interest vs Principal</h3>
@@ -96,7 +177,7 @@
                 <canvas id="interestChart"></canvas>
             </div>
         </div>
-        
+
         <!-- Outstanding Balance Trend -->
         <div class="bg-white rounded-xl shadow-md p-6 slide-up lg:col-span-2">
             <h3 class="text-xl font-semibold text-gray-900 mb-4">Outstanding Balance Trend</h3>
@@ -106,8 +187,11 @@
         </div>
     </div>
 
+    <!-- Transaction Summary Table -->
+    
+
     <!-- Detailed Analysis -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8"></div>
         <!-- Period Analysis -->
         <div class="bg-white rounded-xl shadow-md p-6 slide-up">
             <h3 class="text-xl font-semibold text-gray-900 mb-4">Period Analysis</h3>
@@ -134,30 +218,30 @@
                 </div>
                 <div class="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
                     <span class="text-sm font-medium text-gray-700">Transactions</span>
-                    <span class="text-sm font-bold text-green-600">{{ data | selectattr('id') | selectattr('id', 'number') | list | length }}</span>
+                    <span class="text-sm font-bold text-green-600 break-words overflow-visible">{{ data | selectattr('id') | selectattr('id', 'number') | list | length }}</span>
                 </div>
             </div>
         </div>
-        
+
         <!-- Rate Analysis -->
         <div class="bg-white rounded-xl shadow-md p-6 slide-up">
             <h3 class="text-xl font-semibold text-gray-900 mb-4">Rate Analysis</h3>
             <div class="space-y-4">
                 <div class="text-center p-4 bg-blue-50 rounded-lg">
-                    <div class="text-3xl font-bold text-blue-600">{{ customer.interest_rate }}%</div>
+                    <div class="text-3xl font-bold text-blue-600 break-words overflow-visible">{{ customer.interest_rate }}%</div>
                     <div class="text-sm text-gray-600">Annual Interest Rate</div>
                 </div>
                 <div class="text-center p-4 bg-red-50 rounded-lg">
-                    <div class="text-3xl font-bold text-red-600">{{ customer.tds_rate }}%</div>
+                    <div class="text-3xl font-bold text-red-600 break-words overflow-visible">{{ customer.tds_rate }}%</div>
                     <div class="text-sm text-gray-600">TDS Rate</div>
                 </div>
                 <div class="text-center p-4 bg-green-50 rounded-lg">
-                    <div class="text-3xl font-bold text-green-600">{{ (customer.interest_rate * (1 - customer.tds_rate/100)) | round(2) }}%</div>
+                    <div class="text-3xl font-bold text-green-600 break-words overflow-visible">{{ (customer.interest_rate * (1 - customer.tds_rate/100)) | round(2) }}%</div>
                     <div class="text-sm text-gray-600">Effective Rate</div>
                 </div>
             </div>
         </div>
-        
+
         <!-- Performance Metrics -->
         <div class="bg-white rounded-xl shadow-md p-6 slide-up">
             <h3 class="text-xl font-semibold text-gray-900 mb-4">Performance</h3>
@@ -165,7 +249,7 @@
                 <div>
                     <div class="flex justify-between text-sm mb-1">
                         <span class="text-gray-600">Interest Efficiency</span>
-                        <span class="font-medium">{{ ((total_net_interest / (total_paid + 1)) * 100) | round(1) }}%</span>
+                        <span class="font-medium break-words overflow-visible">{{ ((total_net_interest / (total_paid + 1)) * 100) | round(1) }}%</span>
                     </div>
                     <div class="w-full bg-gray-200 rounded-full h-2">
                         <div class="bg-blue-600 h-2 rounded-full" style="width: {{ ((total_net_interest / (total_paid + 1)) * 100) | round(1) }}%"></div>
@@ -174,7 +258,7 @@
                 <div>
                     <div class="flex justify-between text-sm mb-1">
                         <span class="text-gray-600">Recovery Rate</span>
-                        <span class="font-medium">{{ ((total_received / (total_paid + 1)) * 100) | round(1) }}%</span>
+                        <span class="font-medium break-words overflow-visible">{{ ((total_received / (total_paid + 1)) * 100) | round(1) }}%</span>
                     </div>
                     <div class="w-full bg-gray-200 rounded-full h-2">
                         <div class="bg-green-600 h-2 rounded-full" style="width: {{ ((total_received / (total_paid + 1)) * 100) | round(1) }}%"></div>
@@ -183,7 +267,7 @@
                 <div>
                     <div class="flex justify-between text-sm mb-1">
                         <span class="text-gray-600">TDS Impact</span>
-                        <span class="font-medium">{{ ((total_tds / (total_gross_interest + 1)) * 100) | round(1) }}%</span>
+                        <span class="font-medium break-words overflow-visible">{{ ((total_tds / (total_gross_interest + 1)) * 100) | round(1) }}%</span>
                     </div>
                     <div class="w-full bg-gray-200 rounded-full h-2">
                         <div class="bg-red-600 h-2 rounded-full" style="width: {{ ((total_tds / (total_gross_interest + 1)) * 100) | round(1) }}%"></div>
@@ -195,6 +279,133 @@
 </div>
 
 <script>
+// Transaction data for summary tables
+const transactionData = [{% for row in data %}
+{
+    date: '{{ row.date }}',
+    description: '{{ row.description }}',
+    paid: {{ row.paid }},
+    received: {{ row.received }},
+    interest: {{ row.get('interest', 0) }},
+    tds: {{ row.get('tds', 0) }},
+    net: {{ row.get('net', 0) }},
+    outstanding: {{ row.outstanding }},
+    isSummary: {{ 'true' if row.get('isSummary') else 'false' }},
+    isOpening: {{ 'true' if row.get('isOpening') else 'false' }}
+}{% if not loop.last %},{% endif %}
+{% endfor %}];
+
+function formatCurrency(amount) {
+    return '₹ ' + parseFloat(amount).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+function getQuarter(date) {
+    const d = new Date(date);
+    const month = d.getMonth() + 1;
+    const year = d.getFullYear();
+    const quarter = Math.ceil(month / 3);
+    return `Q${quarter} ${year}`;
+}
+
+function getHalfYear(date) {
+    const d = new Date(date);
+    const month = d.getMonth() + 1;
+    const year = d.getFullYear();
+    const half = month <= 6 ? 'H1' : 'H2';
+    return `${half} ${year}`;
+}
+
+function getYear(date) {
+    const d = new Date(date);
+    return d.getFullYear().toString();
+}
+
+function generateSummaryData(periodType) {
+    const summaryMap = new Map();
+    
+    transactionData.forEach(row => {
+        let period;
+        switch(periodType) {
+            case 'quarterly':
+                period = getQuarter(row.date);
+                break;
+            case 'halfyearly':
+                period = getHalfYear(row.date);
+                break;
+            case 'yearly':
+                period = getYear(row.date);
+                break;
+        }
+        
+        if (!summaryMap.has(period)) {
+            summaryMap.set(period, {
+                period: period,
+                paid: 0,
+                received: 0,
+                interest: 0,
+                tds: 0,
+                net: 0,
+                outstanding: 0
+            });
+        }
+        
+        const summary = summaryMap.get(period);
+        summary.paid += row.paid;
+        summary.received += row.received;
+        summary.interest += row.interest;
+        summary.tds += row.tds;
+        summary.net += row.net;
+        summary.outstanding = row.outstanding; // Take the latest outstanding for the period
+    });
+    
+    return Array.from(summaryMap.values()).sort((a, b) => a.period.localeCompare(b.period));
+}
+
+function renderSummaryTable(periodType, summaryData) {
+    const tbody = document.getElementById(`${periodType}-tbody`);
+    tbody.innerHTML = '';
+    
+    summaryData.forEach(row => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-gray-50';
+        tr.innerHTML = `
+            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${row.period}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-mono break-words overflow-visible">${formatCurrency(row.paid)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-mono break-words overflow-visible">${formatCurrency(row.received)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-mono break-words overflow-visible">${formatCurrency(row.interest)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-mono break-words overflow-visible">${formatCurrency(row.tds)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-mono break-words overflow-visible">${formatCurrency(row.net)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-mono break-words overflow-visible">${formatCurrency(row.outstanding)}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function showTransactionSummary(periodType) {
+    // Update button states
+    document.querySelectorAll('[id$="-btn"]').forEach(btn => {
+        btn.className = 'px-4 py-2 text-sm font-medium rounded-md text-gray-600 hover:text-gray-900';
+    });
+    document.getElementById(`${periodType}-btn`).className = 'px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white shadow-sm';
+    
+    // Hide all tables
+    document.querySelectorAll('.transaction-summary-table').forEach(table => {
+        table.classList.add('hidden');
+    });
+    
+    // Show selected table
+    document.getElementById(`${periodType}-summary`).classList.remove('hidden');
+    
+    // Generate and render data
+    const summaryData = generateSummaryData(periodType);
+    renderSummaryTable(periodType, summaryData);
+}
+
+// Initialize with quarterly view
+document.addEventListener('DOMContentLoaded', function() {
+    showTransactionSummary('quarterly');
+});
+
 // Chart configurations
 const chartData = {
     labels: [{% for row in data[:10] %}'{{ row.date | format_date }}'{% if not loop.last %},{% endif %}{% endfor %}],
