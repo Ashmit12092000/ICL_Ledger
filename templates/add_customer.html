@@ -79,12 +79,25 @@
                 <!-- Advanced Settings -->
                 <div class="pb-6">
                     <h2 class="text-lg font-semibold text-gray-900 mb-4">Advanced Settings</h2>
-                    <div>
-                        <label for="interest_type" class="block text-sm font-medium text-gray-700 mb-2">Interest Type</label>
-                        <select name="interest_type" id="interest_type" class="w-full md:w-1/2 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
-                            <option value="compound">Compound Interest</option>
-                            <option value="simple">Simple Interest</option>
-                        </select>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label for="interest_type" class="block text-sm font-medium text-gray-700 mb-2">Interest Type</label>
+                            <select name="interest_type" id="interest_type" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+                                <option value="compound">Compound Interest</option>
+                                <option value="simple">Simple Interest</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="repayment_method" class="block text-sm font-medium text-gray-700 mb-2">Repayment Method *</label>
+                            <select name="repayment_method" id="repayment_method" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" required>
+                                <option value="exclusive" selected>Exclusive (Current Method)</option>
+                                <option value="inclusive">Inclusive (Include Repayment Date)</option>
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1">
+                                <strong>Exclusive:</strong> Standard method - interest calculated up to (but not including) repayment date.<br>
+                                <strong>Inclusive:</strong> Include repayment date in interest calculation when first transaction in period is a repayment.
+                            </p>
+                        </div>
                     </div>
                 </div>
 
