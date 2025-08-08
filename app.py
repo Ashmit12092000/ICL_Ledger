@@ -1,12 +1,14 @@
 import os
 import io
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, session
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
 from decimal import Decimal, getcontext
 import openpyxl
 from openpyxl.styles import Font, Alignment
 from flask import send_file
+from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
 
 # --- App & Database Configuration ---
 app = Flask(__name__)
@@ -44,6 +46,21 @@ class Transaction(db.Model):
     received = db.Column(db.Float, nullable=False, default=0.0)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
 
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False)
+    role = db.Column(db.String(20), nullable=False, default='user')  # admin, manager, user
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+    
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
 # --- Template Filters ---
 @app.template_filter('format_date')
 def format_date_filter(date_obj):
@@ -58,6 +75,40 @@ def format_currency_filter(num):
         return f"₹ {Decimal(num):,.2f}"
     except (ValueError, TypeError):
         return '₹ 0.00'
+
+# --- Authentication Functions ---
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            flash('Please log in to access this page.', 'error')
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def role_required(role):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if 'user_id' not in session:
+                flash('Please log in to access this page.', 'error')
+                return redirect(url_for('login'))
+            
+            user = User.query.get(session['user_id'])
+            if not user or user.role != role:
+                flash(f'Access denied. {role.title()} role required.', 'error')
+                return redirect(url_for('index'))
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
+def admin_required(f):
+    return role_required('admin')(f)
+
+def get_current_user():
+    if 'user_id' in session:
+        return User.query.get(session['user_id'])
+    return None
 
 # --- Helper Functions ---
 def get_quarter_info(date_obj, start_date_obj):
@@ -233,7 +284,16 @@ def calculate_simple_interest_data(customer, settings):
 
             # Calculate interest for the missing quarter on PRINCIPAL BALANCE ONLY
             days_in_quarter = (quarter_end_date - current_quarter['endDate']).days
-            days_in_year = 366 if is_leap(current_quarter['endDate'].year) else 365
+            # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year = 365
+            if is_leap(current_quarter['endDate'].year):
+                # Check if the quarter period includes Feb 29
+                start_date = current_quarter['endDate']
+                end_date = quarter_end_date
+                feb_29 = datetime(current_quarter['endDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year = 366
+
             quarter_interest = (principal_bal * (settings['interestRate'] / Decimal('100')) * Decimal(days_in_quarter)) / Decimal(days_in_year)
             quarter_net = quarter_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
 
@@ -294,7 +354,16 @@ def calculate_simple_interest_data(customer, settings):
                 opening_end_date = customer.icl_end_date
 
             days_opening = (opening_end_date - tx_quarter_info['startDate']).days
-            days_in_year_opening = 366 if is_leap(tx_quarter_info['startDate'].year) else 365
+            # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year_opening = 365
+            if is_leap(tx_quarter_info['startDate'].year):
+                # Check if the opening period includes Feb 29
+                start_date = tx_quarter_info['startDate']
+                end_date = opening_end_date
+                feb_29 = datetime(tx_quarter_info['startDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year_opening = 366
+
             # Calculate interest on PRINCIPAL BALANCE ONLY (not accumulated balance)
             interest_opening = (principal_balance * (settings['interestRate'] / Decimal('100')) * Decimal(days_opening)) / Decimal(days_in_year_opening)
             net_opening = interest_opening * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
@@ -347,10 +416,28 @@ def calculate_simple_interest_data(customer, settings):
             # Calculate the reduced principal balance after repayment
             # For simple interest, principal balance after this transaction
             reduced_principal_balance = principal_balance
+            
+            # Get the original principal balance before this transaction
+            original_principal_balance = principal_balance - Decimal(tx.paid) + Decimal(tx.received)
 
-            # Calculate interest for the opening period on the REDUCED principal balance (quarter start to repayment date inclusive)
-            days_in_year_opening = 366 if is_leap(tx_quarter_info['startDate'].year) else 365
-            opening_interest = (reduced_principal_balance * (settings['interestRate'] / Decimal('100')) * Decimal(opening_days)) / Decimal(days_in_year_opening)
+            # Special condition: If repayment amount is larger than outstanding amount, 
+            # use original principal balance for interest calculation
+            balance_for_interest_calculation = reduced_principal_balance
+            if Decimal(tx.received) > running_outstanding:
+                balance_for_interest_calculation = original_principal_balance
+
+            # Calculate interest for the opening period on the appropriate balance (quarter start to repayment date inclusive)
+            # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year_opening = 365
+            if is_leap(tx_quarter_info['startDate'].year):
+                # Check if the opening period includes Feb 29
+                start_date = tx_quarter_info['startDate']
+                end_date = opening_period_end
+                feb_29 = datetime(tx_quarter_info['startDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year_opening = 366
+
+            opening_interest = (balance_for_interest_calculation * (settings['interestRate'] / Decimal('100')) * Decimal(opening_days)) / Decimal(days_in_year_opening)
             opening_net = opening_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
 
             # Update the opening balance entry with correct interest calculation
@@ -378,7 +465,16 @@ def calculate_simple_interest_data(customer, settings):
             days = (end_date - tx_date).days
             if is_last_tx_in_quarter: days += 1
 
-        days_in_year = 366 if is_leap(tx_date.year) else 365
+        # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
+        days_in_year = 365
+        if is_leap(tx_date.year):
+            # Check if the calculation period includes Feb 29
+            start_date = tx_date
+            end_date = tx_date + timedelta(days=days)
+            feb_29 = datetime(tx_date.year, 2, 29).date()
+            if start_date <= feb_29 <= end_date:
+                days_in_year = 366
+
         # SIMPLE INTEREST: Calculate interest on PRINCIPAL BALANCE ONLY (not accumulated balance)
         interest = (principal_balance * (settings['interestRate'] / Decimal('100')) * Decimal(days)) / Decimal(days_in_year)
 
@@ -463,7 +559,15 @@ def calculate_compound_interest_data(customer, settings):
 
             # Calculate interest for the missing quarter (respecting ICL end date)
             days_in_quarter = (quarter_end_date - current_quarter['endDate']).days
-            days_in_year = 366 if is_leap(current_quarter['endDate'].year) else 365
+            # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year = 365
+            if is_leap(current_quarter['endDate'].year):
+                # Check if the quarter period includes Feb 29
+                start_date = current_quarter['endDate']
+                end_date = quarter_end_date
+                feb_29 = datetime(current_quarter['endDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year = 366
             quarter_interest = (outstanding_balance * (settings['interestRate'] / Decimal('100')) * Decimal(days_in_quarter)) / Decimal(days_in_year)
             quarter_net = quarter_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
 
@@ -514,7 +618,15 @@ def calculate_compound_interest_data(customer, settings):
                 opening_end_date = customer.icl_end_date
 
             days_opening = (opening_end_date - tx_quarter_info['startDate']).days
-            days_in_year_opening = 366 if is_leap(tx_quarter_info['startDate'].year) else 365
+            # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year_opening = 365
+            if is_leap(tx_quarter_info['startDate'].year):
+                # Check if the opening period includes Feb 29
+                start_date = tx_quarter_info['startDate']
+                end_date = opening_end_date
+                feb_29 = datetime(tx_quarter_info['startDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year_opening = 366
             interest_opening = (running_outstanding * (settings['interestRate'] / Decimal('100')) * Decimal(days_opening)) / Decimal(days_in_year_opening)
             net_opening = interest_opening * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
 
@@ -552,9 +664,23 @@ def calculate_compound_interest_data(customer, settings):
             # Calculate the reduced outstanding balance after repayment
             reduced_outstanding_balance = running_outstanding + Decimal(tx.paid) - Decimal(tx.received)
 
-            # Calculate interest for the opening period on the REDUCED outstanding balance (quarter start to repayment date inclusive)
-            days_in_year_opening = 366 if is_leap(tx_quarter_info['startDate'].year) else 365
-            opening_interest = (reduced_outstanding_balance * (settings['interestRate'] / Decimal('100')) * Decimal(opening_days)) / Decimal(days_in_year_opening)
+            # Special condition: If repayment amount is larger than outstanding amount, 
+            # use original outstanding balance for interest calculation
+            balance_for_interest_calculation = reduced_outstanding_balance
+            if Decimal(tx.received) > running_outstanding:
+                balance_for_interest_calculation = running_outstanding
+
+            # Calculate interest for the opening period on the appropriate balance (quarter start to repayment date inclusive)
+            # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year_opening = 365
+            if is_leap(tx_quarter_info['startDate'].year):
+                # Check if the opening period includes Feb 29
+                start_date = tx_quarter_info['startDate']
+                end_date = opening_period_end
+                feb_29 = datetime(tx_quarter_info['startDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year_opening = 366
+            opening_interest = (balance_for_interest_calculation * (settings['interestRate'] / Decimal('100')) * Decimal(opening_days)) / Decimal(days_in_year_opening)
             opening_net = opening_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
 
             # Update the opening balance entry with correct interest calculation
@@ -582,7 +708,15 @@ def calculate_compound_interest_data(customer, settings):
             days = (end_date - tx_date).days
             if is_last_tx_in_quarter: days += 1
 
-        days_in_year = 366 if is_leap(tx_date.year) else 365
+        # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+        days_in_year = 365
+        if is_leap(tx_date.year):
+            # Check if the calculation period includes Feb 29
+            start_date = tx_date
+            end_date = tx_date + timedelta(days=days)
+            feb_29 = datetime(tx_date.year, 2, 29).date()
+            if start_date <= feb_29 <= end_date:
+                days_in_year = 366
         interest = (outstanding_for_this_row * (settings['interestRate'] / Decimal('100')) * Decimal(days)) / Decimal(days_in_year)
 
         # Calculate penalty interest for overdue scenarios
@@ -657,7 +791,15 @@ def calculate_monthly_compound_interest_data(customer, settings):
 
             # Calculate interest for the missing month
             days_in_month = (month_end_date - current_month['endDate']).days
-            days_in_year = 366 if is_leap(current_month['endDate'].year) else 365
+            # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year = 365
+            if is_leap(current_month['endDate'].year):
+                # Check if the quarter period includes Feb 29
+                start_date = current_month['endDate']
+                end_date = month_end_date
+                feb_29 = datetime(current_month['endDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year = 366
             month_interest = (outstanding_balance * (settings['interestRate'] / Decimal('100')) * Decimal(days_in_month)) / Decimal(days_in_year)
             month_net = month_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
 
@@ -704,7 +846,15 @@ def calculate_monthly_compound_interest_data(customer, settings):
                 opening_end_date = customer.icl_end_date
 
             days_opening = (opening_end_date - tx_month_info['startDate']).days
-            days_in_year_opening = 366 if is_leap(tx_month_info['startDate'].year) else 365
+            # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year_opening = 365
+            if is_leap(tx_month_info['startDate'].year):
+                # Check if the opening period includes Feb 29
+                start_date = tx_month_info['startDate']
+                end_date = opening_end_date
+                feb_29 = datetime(tx_month_info['startDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year_opening = 366
             interest_opening = (running_outstanding * (settings['interestRate'] / Decimal('100')) * Decimal(days_opening)) / Decimal(days_in_year_opening)
             net_opening = interest_opening * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
 
@@ -735,7 +885,15 @@ def calculate_monthly_compound_interest_data(customer, settings):
         days = (end_date - tx_date).days
         if is_last_tx_in_month: days += 1
 
-        days_in_year = 366 if is_leap(tx_date.year) else 365
+        # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+        days_in_year = 365
+        if is_leap(tx_date.year):
+            # Check if the calculation period includes Feb 29
+            start_date = tx_date
+            end_date = tx_date + timedelta(days=days)
+            feb_29 = datetime(tx_date.year, 2, 29).date()
+            if start_date <= feb_29 <= end_date:
+                days_in_year = 366
         interest = (outstanding_for_this_row * (settings['interestRate'] / Decimal('100')) * Decimal(days)) / Decimal(days_in_year)
 
         # Calculate penalty interest for overdue scenarios
@@ -803,7 +961,15 @@ def calculate_yearly_compound_interest_data(customer, settings):
 
             # Calculate interest for the missing year
             days_in_year_period = (year_end_date - current_year['endDate']).days
-            days_in_year = 366 if is_leap(current_year['endDate'].year) else 365
+            # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year = 365
+            if is_leap(current_year['endDate'].year):
+                # Check if the quarter period includes Feb 29
+                start_date = current_year['endDate']
+                end_date = year_end_date
+                feb_29 = datetime(current_year['endDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year = 366
             year_interest = (outstanding_balance * (settings['interestRate'] / Decimal('100')) * Decimal(days_in_year_period)) / Decimal(days_in_year)
             year_net = year_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
 
@@ -850,7 +1016,15 @@ def calculate_yearly_compound_interest_data(customer, settings):
                 opening_end_date = customer.icl_end_date
 
             days_opening = (opening_end_date - tx_year_info['startDate']).days
-            days_in_year_opening = 366 if is_leap(tx_year_info['startDate'].year) else 365
+            # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year_opening = 365
+            if is_leap(tx_year_info['startDate'].year):
+                # Check if the opening period includes Feb 29
+                start_date = tx_year_info['startDate']
+                end_date = opening_end_date
+                feb_29 = datetime(tx_year_info['startDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year_opening = 366
             interest_opening = (running_outstanding * (settings['interestRate'] / Decimal('100')) * Decimal(days_opening)) / Decimal(days_in_year_opening)
             net_opening = interest_opening * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
 
@@ -885,6 +1059,14 @@ def calculate_yearly_compound_interest_data(customer, settings):
 
         # For yearly compounding, use 365 days as standard practice unless it's a leap year calculation
         days_in_year = 365  # Standard year for interest calculation
+        # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+        if is_leap(tx_date.year):
+            # Check if the calculation period includes Feb 29
+            start_date = tx_date
+            end_date = tx_date + timedelta(days=days)
+            feb_29 = datetime(tx_date.year, 2, 29).date()
+            if start_date <= feb_29 <= end_date:
+                days_in_year = 366
         interest = (outstanding_for_this_row * (settings['interestRate'] / Decimal('100')) * Decimal(days)) / Decimal(days_in_year)
 
         # Calculate penalty interest for overdue scenarios
@@ -925,23 +1107,96 @@ def calculate_yearly_compound_interest_data(customer, settings):
 
 # --- Routes ---
 @app.route('/')
+@login_required
 def index():
     customers = Customer.query.all()
-    return render_template('index.html', customers=customers)
+    current_user = get_current_user()
+    return render_template('index.html', customers=customers, current_user=current_user)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        
+        user = User.query.filter_by(username=username).first()
+        
+        if user and user.check_password(password) and user.is_active:
+            session['user_id'] = user.id
+            session['username'] = user.username
+            session['role'] = user.role
+            flash(f'Welcome back, {user.username}!', 'success')
+            
+            # Redirect to next page if specified, otherwise to index
+            next_page = request.args.get('next')
+            if next_page:
+                return redirect(next_page)
+            return redirect(url_for('index'))
+        else:
+            flash('Invalid username or password.', 'error')
+    
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash('You have been logged out.', 'info')
+    return redirect(url_for('login'))
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        username = request.form['username']
+        email = request.form['email']
+        password = request.form['password']
+        role = request.form.get('role', 'user')
+        
+        # Check if user already exists
+        if User.query.filter_by(username=username).first():
+            flash('Username already exists.', 'error')
+            return render_template('register.html')
+        
+        if User.query.filter_by(email=email).first():
+            flash('Email already exists.', 'error')
+            return render_template('register.html')
+        
+        # Create new user
+        new_user = User(username=username, email=email, role=role)
+        new_user.set_password(password)
+        
+        db.session.add(new_user)
+        db.session.commit()
+        
+        flash('Registration successful! Please log in.', 'success')
+        return redirect(url_for('login'))
+    
+    return render_template('register.html')
+
+@app.route('/users')
+@admin_required
+def manage_users():
+    users = User.query.all()
+    current_user = get_current_user()
+    return render_template('manage_users.html', users=users, current_user=current_user)
 
 @app.route('/customers')
+@login_required
 def customers():
     customers = Customer.query.all()
-    return render_template('customers.html', customers=customers)
+    current_user = get_current_user()
+    return render_template('customers.html', customers=customers, current_user=current_user)
 
 @app.route('/customer/<int:customer_id>')
+@login_required
 def customer_detail(customer_id):
     customer = Customer.query.get_or_404(customer_id)
     # No need to cast to Decimal here as it's handled in the calculation engine
     calculated_data = calculate_data(customer)
-    return render_template('customer_detail.html', customer=customer, data=calculated_data, today=datetime.now().strftime('%Y-%m-%d'),datetime=datetime)
+    current_user = get_current_user()
+    return render_template('customer_detail.html', customer=customer, data=calculated_data, today=datetime.now().strftime('%Y-%m-%d'),datetime=datetime, current_user=current_user)
 
 @app.route('/add_customer', methods=['GET', 'POST'])
+@login_required
 def add_customer():
     if request.method == 'POST':
         icl_end_date = None
@@ -1099,7 +1354,15 @@ def calculate_settlement_amount(customer, closure_date):
             'tdsRate': Decimal(customer.tds_rate)
         }
 
-        days_in_year = 366 if is_leap(closure_date.year) else 365
+        # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+        days_in_year = 365
+        if is_leap(closure_date.year):
+            # Check if the calculation period includes Feb 29
+            start_date = last_date
+            end_date = closure_date
+            feb_29 = datetime(closure_date.year, 2, 29).date()
+            if start_date <= feb_29 <= end_date:
+                days_in_year = 366
         additional_interest = (outstanding_balance * (settings['interestRate'] / Decimal('100')) * Decimal(additional_days)) / Decimal(days_in_year)
 
         # Calculate penalty if overdue
@@ -1228,7 +1491,15 @@ def calculate_balance_at_date(customer, target_date):
                 'tdsRate': Decimal(customer.tds_rate)
             }
 
-            days_in_year = 366 if is_leap(last_date.year) else 365
+            # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year = 365
+            if is_leap(last_date.year):
+                # Check if the calculation period includes Feb 29
+                start_date = last_date
+                end_date = effective_target_date
+                feb_29 = datetime(last_date.year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year = 366
             additional_interest = (last_balance * (settings['interestRate'] / Decimal('100')) * Decimal(additional_days)) / Decimal(days_in_year)
             additional_net_interest = additional_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
 
@@ -1312,7 +1583,27 @@ def export_excel(customer_id):
     output.seek(0)
     return send_file(output, as_attachment=True, download_name=f'{customer.name}_transactions.xlsx', mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
+def create_default_users():
+    """Create default users if they don't exist"""
+    if not User.query.filter_by(username='admin').first():
+        admin_user = User(username='admin', email='admin@example.com', role='admin')
+        admin_user.set_password('admin123')
+        db.session.add(admin_user)
+    
+    if not User.query.filter_by(username='manager').first():
+        manager_user = User(username='manager', email='manager@example.com', role='manager')
+        manager_user.set_password('manager123')
+        db.session.add(manager_user)
+    
+    if not User.query.filter_by(username='user').first():
+        user_user = User(username='user', email='user@example.com', role='user')
+        user_user.set_password('user123')
+        db.session.add(user_user)
+    
+    db.session.commit()
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True,port=5000)
+        create_default_users()
+    app.run(debug=True, host='0.0.0.0', port=5000)
