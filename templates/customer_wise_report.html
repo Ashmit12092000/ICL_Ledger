@@ -1,0 +1,136 @@
+
+{% extends 'base.html' %}
+{% block title %}Customer Wise Report - ICL Calculator{% endblock %}
+{% block content %}
+<div class="fade-in">
+    <!-- Page Header -->
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-900 mb-2">Customer Wise Report</h1>
+        <p class="text-gray-600">Generate detailed reports for individual customers</p>
+    </div>
+
+    <!-- Customer Selection Form -->
+    <div class="bg-white rounded-xl shadow-md p-6 mb-8 slide-up">
+        <h2 class="text-xl font-semibold text-gray-900 mb-6">Select Customer</h2>
+        
+        <form method="POST" class="space-y-4">
+            <div>
+                <label for="customer_id" class="block text-sm font-medium text-gray-700 mb-2">Customer *</label>
+                <select name="customer_id" id="customer_id" class="w-full md:w-96 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" required>
+                    <option value="">Select a customer...</option>
+                    {% for customer in customers %}
+                    <option value="{{ customer.id }}" {% if selected_customer and selected_customer.id == customer.id %}selected{% endif %}>
+                        {{ customer.name }} - Current Balance: 
+                        {% if customer.transactions %}
+                            {% set calculated_data = calculate_data_global(customer) %}
+                            {% if calculated_data %}
+                                {{ calculated_data[-1]['outstanding'] | format_currency }}
+                            {% else %}
+                                ₹ 0.00
+                            {% endif %}
+                        {% else %}
+                            ₹ 0.00
+                        {% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <div>
+                <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg transition-colors hover-lift">
+                    <svg class="h-5 w-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                    Generate Report
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Report Results -->
+    {% if report_data %}
+    <div class="bg-white rounded-xl shadow-md overflow-hidden slide-up">
+        <!-- Customer Info Header -->
+        <div class="bg-gradient-to-r from-blue-500 to-purple-600 p-6 text-white">
+            <h3 class="text-2xl font-bold mb-2">{{ report_data.customer.name }}</h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                <div>
+                    <span class="text-blue-100">ICL Start Date:</span>
+                    <span class="font-semibold ml-2">{{ report_data.customer.icl_start_date | format_date }}</span>
+                </div>
+                <div>
+                    <span class="text-blue-100">ICL End Date:</span>
+                    <span class="font-semibold ml-2">
+                        {% if report_data.customer.icl_end_date %}
+                            {{ report_data.customer.icl_end_date | format_date }}
+                        {% else %}
+                            Ongoing
+                        {% endif %}
+                    </span>
+                </div>
+                <div>
+                    <span class="text-blue-100">Interest Rate:</span>
+                    <span class="font-semibold ml-2">{{ report_data.customer.interest_rate }}%</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Current Balance Summary -->
+        <div class="p-6 border-b border-gray-200">
+            <div class="text-center">
+                <h4 class="text-lg font-semibold text-gray-900 mb-2">Current Outstanding Balance</h4>
+                <div class="text-3xl font-bold text-blue-600 break-words overflow-visible">
+                    {{ report_data.current_balance | format_currency }}
+                </div>
+                <p class="text-sm text-gray-600 mt-2">As of {{ datetime.now().strftime('%d/%m/%Y') }}</p>
+            </div>
+        </div>
+
+        <!-- Transaction Summary -->
+        {% if report_data.calculated_data %}
+        <div class="p-6">
+            <h4 class="text-lg font-semibold text-gray-900 mb-4">Account Summary</h4>
+            {% set total_paid = report_data.calculated_data | selectattr('paid') | sum(attribute='paid') %}
+            {% set total_received = report_data.calculated_data | selectattr('received') | sum(attribute='received') %}
+            {% set total_interest = report_data.calculated_data | selectattr('interest') | sum(attribute='interest') %}
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div class="text-center p-4 bg-green-50 rounded-lg">
+                    <div class="text-2xl font-bold text-green-600">{{ total_paid | format_currency }}</div>
+                    <div class="text-sm text-green-700">Total Amount Given</div>
+                </div>
+                <div class="text-center p-4 bg-blue-50 rounded-lg">
+                    <div class="text-2xl font-bold text-blue-600">{{ total_received | format_currency }}</div>
+                    <div class="text-sm text-blue-700">Total Amount Received</div>
+                </div>
+                <div class="text-center p-4 bg-purple-50 rounded-lg">
+                    <div class="text-2xl font-bold text-purple-600">{{ total_interest | format_currency }}</div>
+                    <div class="text-sm text-purple-700">Total Interest Generated</div>
+                </div>
+            </div>
+
+            <!-- Export Button -->
+            <div class="mt-6 text-center">
+                <a href="{{ url_for('export_excel', customer_id=report_data.customer.id) }}" class="inline-flex items-center px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-colors hover-lift">
+                    <svg class="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                    Export to Excel
+                </a>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Back to Reports -->
+    <div class="mt-8 text-center">
+        <a href="{{ url_for('reports') }}" class="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium">
+            <svg class="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+            </svg>
+            Back to Reports
+        </a>
+    </div>
+</div>
+{% endblock %}
