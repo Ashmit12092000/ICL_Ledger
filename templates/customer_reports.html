@@ -29,7 +29,8 @@
     <!-- Key Metrics -->
     {% set total_paid = data | selectattr('paid') | map(attribute='paid') | sum %}
     {% set total_received = data | selectattr('received') | map(attribute='received') | sum %}
-    {% set total_interest = data | selectattr('interest') | map(attribute='interest') | sum %}
+    {% set total_gross_interest = data | selectattr('interest') | map(attribute='interest') | sum %}
+    {% set total_net_interest = data | selectattr('net') | map(attribute='net') | sum %}
     {% set total_tds = data | selectattr('tds') | map(attribute='tds') | sum %}
     {% set final_outstanding = data[-1].outstanding if data else 0 %}
     {% set net_flow = total_received - total_paid %}
@@ -52,8 +53,8 @@
         </div>
         
         <div class="bg-white rounded-xl shadow-md p-6 text-center slide-up" style="animation-delay: 0.2s">
-            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-purple-600 break-words overflow-hidden">{{ total_interest | format_currency }}</div>
-            <div class="text-sm text-gray-500 mt-1">Total Interest</div>
+            <div class="text-lg sm:text-xl lg:text-2xl font-bold text-purple-600 break-words overflow-hidden">{{ total_net_interest | format_currency }}</div>
+            <div class="text-sm text-gray-500 mt-1">Total Net Interest</div>
             <div class="mt-2 text-xs text-blue-600">{{ customer.interest_rate }}% rate</div>
         </div>
         
@@ -164,10 +165,10 @@
                 <div>
                     <div class="flex justify-between text-sm mb-1">
                         <span class="text-gray-600">Interest Efficiency</span>
-                        <span class="font-medium">{{ ((total_interest / (total_paid + 1)) * 100) | round(1) }}%</span>
+                        <span class="font-medium">{{ ((total_net_interest / (total_paid + 1)) * 100) | round(1) }}%</span>
                     </div>
                     <div class="w-full bg-gray-200 rounded-full h-2">
-                        <div class="bg-blue-600 h-2 rounded-full" style="width: {{ ((total_interest / (total_paid + 1)) * 100) | round(1) }}%"></div>
+                        <div class="bg-blue-600 h-2 rounded-full" style="width: {{ ((total_net_interest / (total_paid + 1)) * 100) | round(1) }}%"></div>
                     </div>
                 </div>
                 <div>
@@ -182,10 +183,10 @@
                 <div>
                     <div class="flex justify-between text-sm mb-1">
                         <span class="text-gray-600">TDS Impact</span>
-                        <span class="font-medium">{{ ((total_tds / (total_interest + 1)) * 100) | round(1) }}%</span>
+                        <span class="font-medium">{{ ((total_tds / (total_gross_interest + 1)) * 100) | round(1) }}%</span>
                     </div>
                     <div class="w-full bg-gray-200 rounded-full h-2">
-                        <div class="bg-red-600 h-2 rounded-full" style="width: {{ ((total_tds / (total_interest + 1)) * 100) | round(1) }}%"></div>
+                        <div class="bg-red-600 h-2 rounded-full" style="width: {{ ((total_tds / (total_gross_interest + 1)) * 100) | round(1) }}%"></div>
                     </div>
                 </div>
             </div>
@@ -251,7 +252,7 @@ new Chart(interestCtx, {
     data: {
         labels: ['Total Interest', 'TDS Deducted', 'Net Interest'],
         datasets: [{
-            data: [{{ total_interest }}, {{ total_tds }}, {{ total_interest - total_tds }}],
+            data: [{{ total_gross_interest }}, {{ total_tds }}, {{ total_net_interest }}],
             backgroundColor: [
                 'rgba(139, 92, 246, 0.8)',
                 'rgba(239, 68, 68, 0.8)',
