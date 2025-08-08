@@ -23,6 +23,7 @@ getcontext().prec = 28
 # --- Database Models ---
 class Customer(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    customer_id = db.Column(db.String(50), unique=True, nullable=False)
     name = db.Column(db.String(100), nullable=False)
     address = db.Column(db.String(200))
     icl_start_date = db.Column(db.Date, nullable=False)
@@ -136,8 +137,10 @@ def calculate_dashboard_stats(customers):
         if customer.transactions:
             calculated_data = calculate_data(customer)
             if calculated_data:
-                # Get the final outstanding balance
+                # Get the final outstanding balance and reset negative to zero
                 final_outstanding = calculated_data[-1]['outstanding']
+                if final_outstanding < 0:
+                    final_outstanding = Decimal('0')
                 total_outstanding += final_outstanding
                 
                 # Calculate this month's interest
@@ -2060,6 +2063,7 @@ def customer_detail(customer_id):
 @login_required
 def add_customer():
     if request.method == 'POST':
+        customer_id = request.form['customer_id'].strip()
         name = request.form['name']
         address = request.form.get('address', '')
         icl_start_date = datetime.strptime(request.form['icl_start_date'], '%Y-%m-%d').date()
@@ -2068,6 +2072,13 @@ def add_customer():
             icl_end_date = datetime.strptime(icl_end_date, '%Y-%m-%d').date()
         else:
             icl_end_date = None
+
+        # Check for duplicate customer ID
+        existing_customer = Customer.query.filter_by(customer_id=customer_id).first()
+        if existing_customer:
+            flash(f'Customer ID "{customer_id}" already exists. Please use a different Customer ID.', 'error')
+            current_user = get_current_user()
+            return render_template('add_customer.html', current_user=current_user, form_data=request.form)
 
         interest_rate = float(request.form['interest_rate'])
 
@@ -2085,6 +2096,7 @@ def add_customer():
         repayment_method = request.form.get('repayment_method', 'exclusive')
 
         customer = Customer(
+            customer_id=customer_id,
             name=name,
             address=address,
             icl_start_date=icl_start_date,
@@ -2111,6 +2123,17 @@ def add_customer():
 def edit_customer(customer_id):
     customer = Customer.query.get_or_404(customer_id)
     if request.method == 'POST':
+        new_customer_id = request.form['customer_id'].strip()
+        
+        # Check for duplicate customer ID (only if changed)
+        if new_customer_id != customer.customer_id:
+            existing_customer = Customer.query.filter_by(customer_id=new_customer_id).first()
+            if existing_customer:
+                flash(f'Customer ID "{new_customer_id}" already exists. Please use a different Customer ID.', 'error')
+                current_user = get_current_user()
+                return render_template('edit_customer.html', customer=customer, current_user=current_user)
+        
+        customer.customer_id = new_customer_id
         customer.name = request.form['name']
         customer.address = request.form['address']
         customer.icl_start_date = datetime.strptime(request.form['icl_start_date'], '%Y-%m-%d').date()
@@ -2228,20 +2251,10 @@ def close_loan(customer_id):
     customer = Customer.query.get_or_404(customer_id)
     closure_date = datetime.strptime(request.form['closure_date'], '%Y-%m-%d').date()
 
-    # Calculate final settlement amount
+    # Calculate final settlement amount for display purposes
     settlement_amount = calculate_settlement_amount(customer, closure_date)
 
-    # Add final settlement transaction
-    settlement_tx = Transaction(
-        date=closure_date,
-        description='Loan Closure - Final Settlement',
-        paid=Decimal('0'),
-        received=float(settlement_amount['total_settlement']),
-        customer_id=customer.id
-    )
-    db.session.add(settlement_tx)
-
-    # Update customer status
+    # Update customer status only - no automatic transaction creation
     customer.status = 'closed'
     customer.closure_date = closure_date
     customer.overdue_days = 0
@@ -2404,6 +2417,7 @@ def period_based_report():
                 net_amount = principal_balance + period_interest - period_tds
                 
                 report_data.append({
+                    'customer_id': customer.customer_id,
                     'icl_manual_no': f"ICL-{customer.id:04d}",
                     'customer_name': customer.name,
                     'icl_start_date': customer.icl_start_date,
