@@ -54,7 +54,7 @@
             {% endif %}
         </div>
 
-        <div class="grid grid-cols-2 md:grid-cols-7 gap-6">
+        <div class="grid grid-cols-2 md:grid-cols-8 gap-6">
             <div class="text-center">
                 <div class="text-2xl font-bold text-blue-600">{{ customer.icl_start_date | format_date }}</div>
                 <div class="text-sm text-gray-500">ICL Start Date</div>
@@ -68,6 +68,10 @@
             <div class="text-center">
                 <div class="text-2xl font-bold text-green-600">{{ customer.interest_rate }}%</div>
                 <div class="text-sm text-gray-500">Interest Rate</div>
+            </div>
+            <div class="text-center">
+                <div class="text-2xl font-bold text-cyan-600">{{ customer.interest_type | capitalize }}</div>
+                <div class="text-sm text-gray-500">Interest Type</div>
             </div>
             <div class="text-center">
                 <div class="text-2xl font-bold text-red-600">{{ customer.tds_rate }}%</div>
@@ -168,7 +172,13 @@
         <div class="flex items-center justify-between">
             <div class="flex-1 min-w-0">
                 <p class="text-orange-100 text-sm">Outstanding</p>
-                <p class="text-2xl font-bold break-words overflow-visible">{{ final_outstanding | format_currency }}</p>
+                <p class="text-2xl font-bold break-words overflow-visible">
+                    {% if final_outstanding < 0 %}
+                        {{ 0 | format_currency }}
+                    {% else %}
+                        {{ final_outstanding | format_currency }}
+                    {% endif %}
+                </p>
             </div>
             <div class="text-orange-200 flex-shrink-0">
                 <svg class="h-8 w-8" fill="currentColor" viewBox="0 0 20 20">
@@ -183,7 +193,14 @@
         <div class="px-6 py-4 border-b border-gray-200">
             <div class="flex justify-between items-center">
                 <h2 class="text-xl font-semibold text-gray-900">Transaction History</h2>
-                <div class="flex space-x-2">
+                <div class="flex items-center space-x-4">
+                    <select id="transactionSort" class="px-3 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        <option value="date-desc">Date (Newest First)</option>
+                        <option value="date-asc">Date (Oldest First)</option>
+                        <option value="amount-desc">Amount (High to Low)</option>
+                        <option value="amount-asc">Amount (Low to High)</option>
+                        <option value="description">Description (A-Z)</option>
+                    </select>
                     <form method="POST" action="{{ url_for('delete_all_transactions', customer_id=customer.id) }}" onsubmit="return confirm('Are you sure you want to delete all transactions?');" class="inline">
                         <button type="submit" class="text-red-600 hover:text-red-900 text-sm font-medium transition-colors">Clear All</button>
                     </form>
@@ -196,12 +213,12 @@
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Paid</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Received</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100" onclick="sortTransactionTable('date')">Date <span class="sort-indicator"></span></th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100" onclick="sortTransactionTable('description')">Description <span class="sort-indicator"></span></th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100" onclick="sortTransactionTable('paid')">Paid <span class="sort-indicator"></span></th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100" onclick="sortTransactionTable('received')">Received <span class="sort-indicator"></span></th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Days</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Outstanding</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase cursor-pointer hover:bg-gray-100" onclick="sortTransactionTable('outstanding')">Outstanding <span class="sort-indicator"></span></th>
                         {% if customer.interest_type == 'simple' %}
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Principal Balance</th>
                         {% endif %}
@@ -214,7 +231,15 @@
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
                     {% for row in data %}
-                    <tr class="hover:bg-gray-50 transition-colors {% if row.get('isSummary') %}bg-blue-50 font-semibold{% endif %} {% if row.get('isOpening') %}bg-green-50{% endif %} {% if row.get('isMissing') %}bg-yellow-50{% endif %} {% if row.get('is_overdue') %}bg-red-50{% endif %}">
+                    <tr class="transaction-row hover:bg-gray-50 transition-colors {% if row.get('isSummary') %}bg-blue-50 font-semibold{% endif %} {% if row.get('isOpening') %}bg-green-50{% endif %} {% if row.get('isMissing') %}bg-yellow-50{% endif %} {% if row.get('is_overdue') %}bg-red-50{% endif %} {% if row.received > 0 and not row.get('isSummary') and not row.get('isOpening') and not row.get('isMissing') %}bg-red-50 border-l-4 border-red-400{% endif %}"
+                        data-date="{{ row.date.strftime('%Y-%m-%d') if row.date else '' }}"
+                        data-description="{{ row.description.lower() if row.description else '' }}"
+                        data-paid="{{ row.paid | float }}"
+                        data-received="{{ row.received | float }}"
+                        data-outstanding="{{ row.outstanding | float }}"
+                        data-is-summary="{{ '1' if row.get('isSummary') else '0' }}"
+                        data-is-opening="{{ '1' if row.get('isOpening') else '0' }}"
+                        data-is-missing="{{ '1' if row.get('isMissing') else '0' }}">
                         <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.date | format_date }}</td>
                         <td class="px-6 py-4 text-sm">
                             {{ row.description }}
@@ -232,7 +257,7 @@
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.paid | format_currency }}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.received | format_currency }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm {% if row.received > 0 and not row.get('isSummary') and not row.get('isOpening') and not row.get('isMissing') %}text-red-600 font-medium{% endif %}">{{ row.received | format_currency }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.get('days', '') }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">{{ row.outstanding | format_currency }}</td>
                         {% if customer.interest_type == 'simple' %}
@@ -285,7 +310,44 @@
     </div>
 </div>
 
-<div id="closeLoanModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden">
+<!-- Balance Notification Modal -->
+<div id="balanceNotificationModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden z-50">
+    <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+        <div class="mt-3">
+            <div class="flex items-center mb-4">
+                <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-green-100">
+                    <svg class="h-6 w-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+            </div>
+            <h3 class="text-lg font-medium text-gray-900 mb-4 text-center">Outstanding Balance Alert</h3>
+            <div class="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
+                <p class="text-sm text-green-800 text-center">
+                    <strong>Great news!</strong> The outstanding balance is approximately zero 
+                    (<span id="balanceAmount"></span>). 
+                    This loan account may be ready for closure.
+                </p>
+            </div>
+            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                <p class="text-sm text-blue-800">
+                    <strong>Note:</strong> Please review all transactions and consider closing this loan account 
+                    if all payments have been settled.
+                </p>
+            </div>
+            <div class="flex space-x-4">
+                <button type="button" onclick="showCloseLoanModal(); hideBalanceNotificationModal();" class="flex-1 bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors">
+                    Close Loan
+                </button>
+                <button type="button" onclick="hideBalanceNotificationModal()" class="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors">
+                    Dismiss
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="closeLoanModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden z-50">
     <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
         <div class="mt-3">
             <h3 class="text-lg font-medium text-gray-900 mb-4">Close Loan</h3>
@@ -322,10 +384,189 @@ function hideCloseLoanModal() {
     document.getElementById('closeLoanModal').classList.add('hidden');
 }
 
-// Hide modal when clicking outside
+function showBalanceNotificationModal() {
+    document.getElementById('balanceNotificationModal').classList.remove('hidden');
+}
+
+function hideBalanceNotificationModal() {
+    document.getElementById('balanceNotificationModal').classList.add('hidden');
+}
+
+// Check for balance notification on page load
+document.addEventListener('DOMContentLoaded', function() {
+    checkBalanceNotification();
+});
+
+function checkBalanceNotification() {
+    // Don't show popup if loan is closed
+    const customerStatus = '{{ customer.status }}';
+    if (customerStatus === 'closed') {
+        console.log('Loan is closed, skipping balance notification');
+        return;
+    }
+
+    // Check if notification has already been shown for this customer
+    const customerId = {{ customer.id }};
+    const notificationKey = `balanceNotification_${customerId}`;
+
+    if (sessionStorage.getItem(notificationKey)) {
+        console.log('Balance notification already shown for this session');
+        return;
+    }
+
+    // Get outstanding balance
+    let outstandingBalance = {{ final_outstanding | float }};
+
+    // Reset negative amounts to zero
+    if (outstandingBalance < 0) {
+        outstandingBalance = 0;
+    }
+
+    // Count actual transactions (not summary/opening/missing entries)
+    const allRows = document.querySelectorAll('.transaction-row');
+    let actualTransactionCount = 0;
+
+    allRows.forEach(row => {
+        const isSummary = row.dataset.isSummary === '1';
+        const isOpening = row.dataset.isOpening === '1';
+        const isMissing = row.dataset.isMissing === '1';
+
+        if (!isSummary && !isOpening && !isMissing) {
+            actualTransactionCount++;
+        }
+    });
+
+    console.log('Outstanding Balance:', outstandingBalance);
+    console.log('Actual Transaction Count:', actualTransactionCount);
+    console.log('Balance within range:', Math.abs(outstandingBalance) <= 5);
+    console.log('More than 1 transaction:', actualTransactionCount > 1);
+
+    // Check if balance is approximately zero (-5 to +5) and there are more than 1 transactions
+    if (Math.abs(outstandingBalance) <= 5 && actualTransactionCount > 1) {
+        // Mark notification as shown
+        sessionStorage.setItem(notificationKey, 'true');
+
+        // Format the balance amount for display
+        const formatter = new Intl.NumberFormat('en-IN', {
+            style: 'currency',
+            currency: 'INR',
+            minimumFractionDigits: 2
+        });
+
+        document.getElementById('balanceAmount').textContent = formatter.format(outstandingBalance);
+
+        console.log('Showing balance notification modal');
+
+        // Show the notification modal after a short delay
+        setTimeout(function() {
+            showBalanceNotificationModal();
+        }, 1000);
+    }
+}
+
+// Hide modals when clicking outside
 document.getElementById('closeLoanModal').addEventListener('click', function(event) {
     if (event.target === this) {
         hideCloseLoanModal();
+    }
+});
+
+document.getElementById('balanceNotificationModal').addEventListener('click', function(event) {
+    if (event.target === this) {
+        hideBalanceNotificationModal();
+    }
+});
+
+// Transaction table sorting
+document.addEventListener('DOMContentLoaded', function() {
+    const transactionSort = document.getElementById('transactionSort');
+    if (transactionSort) {
+        transactionSort.addEventListener('change', function() {
+            sortTransactionTableBy(this.value);
+        });
+    }
+
+    window.sortTransactionTable = function(column) {
+        const currentSort = transactionSort ? transactionSort.value : 'date-desc';
+        let newSort = column + '-desc';
+
+        // Toggle sort direction if same column
+        if (currentSort === column + '-desc') {
+            newSort = column + '-asc';
+        } else if (currentSort === column + '-asc') {
+            newSort = column + '-desc';
+        }
+
+        if (transactionSort) {
+            transactionSort.value = newSort;
+        }
+        sortTransactionTableBy(newSort);
+
+        // Update sort indicators
+        document.querySelectorAll('.sort-indicator').forEach(indicator => {
+            indicator.textContent = '';
+        });
+
+        const indicator = event.target.querySelector('.sort-indicator');
+        if (indicator) {
+            indicator.textContent = newSort.includes('-desc') ? ' ↓' : ' ↑';
+        }
+    };
+
+    function sortTransactionTableBy(sortBy) {
+        const tbody = document.querySelector('.transaction-row').parentNode;
+        const rows = Array.from(document.querySelectorAll('.transaction-row'));
+
+        rows.sort((a, b) => {
+            // Always keep summary, opening, and missing rows in their relative positions
+            const aIsSummary = a.dataset.isSummary === '1';
+            const bIsSummary = b.dataset.isSummary === '1';
+            const aIsOpening = a.dataset.isOpening === '1';
+            const bIsOpening = b.dataset.isOpening === '1';
+            const aIsMissing = a.dataset.isMissing === '1';
+            const bIsMissing = b.dataset.isMissing === '1';
+
+            // Don't sort special rows
+            if (aIsSummary || bIsSummary || aIsOpening || bIsOpening || aIsMissing || bIsMissing) {
+                return 0;
+            }
+
+            let aValue, bValue;
+
+            switch(sortBy) {
+                case 'date-desc':
+                    return new Date(b.dataset.date) - new Date(a.dataset.date);
+                case 'date-asc':
+                    return new Date(a.dataset.date) - new Date(b.dataset.date);
+                case 'description':
+                    return a.dataset.description.localeCompare(b.dataset.description);
+                case 'paid-desc':
+                    return parseFloat(b.dataset.paid) - parseFloat(a.dataset.paid);
+                case 'paid-asc':
+                    return parseFloat(a.dataset.paid) - parseFloat(b.dataset.paid);
+                case 'received-desc':
+                    return parseFloat(b.dataset.received) - parseFloat(a.dataset.received);
+                case 'received-asc':
+                    return parseFloat(a.dataset.received) - parseFloat(b.dataset.received);
+                case 'outstanding-desc':
+                    return parseFloat(b.dataset.outstanding) - parseFloat(a.dataset.outstanding);
+                case 'outstanding-asc':
+                    return parseFloat(a.dataset.outstanding) - parseFloat(b.dataset.outstanding);
+                case 'amount-desc':
+                    const aMax = Math.max(parseFloat(a.dataset.paid), parseFloat(a.dataset.received));
+                    const bMax = Math.max(parseFloat(b.dataset.paid), parseFloat(b.dataset.received));
+                    return bMax - aMax;
+                case 'amount-asc':
+                    const aMin = Math.max(parseFloat(a.dataset.paid), parseFloat(a.dataset.received));
+                    const bMin = Math.max(parseFloat(b.dataset.paid), parseFloat(b.dataset.received));
+                    return aMin - bMin;
+                default:
+                    return 0;
+            }
+        });
+
+        // Re-append sorted rows
+        rows.forEach(row => tbody.appendChild(row));
     }
 });
 </script>
