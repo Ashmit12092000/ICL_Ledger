@@ -202,6 +202,9 @@
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Received</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Days</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Outstanding</th>
+                        {% if customer.interest_type == 'simple' %}
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Principal Balance</th>
+                        {% endif %}
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Interest</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Penalty</th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">TDS</th>
@@ -232,6 +235,9 @@
                         <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.received | format_currency }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">{{ row.get('days', '') }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">{{ row.outstanding | format_currency }}</td>
+                        {% if customer.interest_type == 'simple' %}
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">{{ row.get('principal_balance') | format_currency }}</td>
+                        {% endif %}
                         <td class="px-6 py-4 whitespace-nowrap text-sm">
                             {% if row.get('interest') %}
                                 {{ row.get('interest', '') | format_currency }}
