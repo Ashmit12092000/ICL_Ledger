@@ -53,6 +53,7 @@
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer ID</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ICL Manual No</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name of Party</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date of ICL</th>
@@ -69,6 +70,7 @@
                 <tbody class="bg-white divide-y divide-gray-200">
                     {% for row in report_data %}
                     <tr class="hover:bg-gray-50 transition-colors duration-150">
+                        <td class="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ row.customer_id }}</td>
                         <td class="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ row.icl_manual_no }}</td>
                         <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{{ row.customer_name }}</td>
                         <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900">{{ row.icl_start_date | format_date }}</td>
@@ -92,7 +94,7 @@
                 <!-- Summary Row -->
                 <tfoot class="bg-gray-100">
                     <tr class="font-bold">
-                        <td colspan="5" class="px-4 py-4 text-right text-sm font-bold text-gray-900">TOTALS:</td>
+                        <td colspan="6" class="px-4 py-4 text-right text-sm font-bold text-gray-900">TOTALS:</td>
                         <td class="px-4 py-4 whitespace-nowrap text-sm text-right font-bold text-gray-900">
                             {{ report_data | sum(attribute='total_given') | format_currency }}
                         </td>
@@ -146,6 +148,7 @@ function exportToExcel() {
     
     // Headers
     csv.push([
+        'Customer ID',
         'ICL Manual No',
         'Name of Party', 
         'Date of ICL',
@@ -162,6 +165,7 @@ function exportToExcel() {
     // Data rows
     {% for row in report_data %}
     csv.push([
+        '{{ row.customer_id }}',
         '{{ row.icl_manual_no }}',
         '"{{ row.customer_name }}"',
         '{{ row.icl_start_date | format_date }}',
