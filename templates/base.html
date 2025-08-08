@@ -53,6 +53,9 @@
                         <a href="{{ url_for('customers') }}" class="nav-item text-gray-700 hover:text-blue-600 px-3 py-2 text-sm font-medium {% if request.endpoint == 'customers' %}active text-blue-600{% endif %}">
                             Customers
                         </a>
+                        <a href="{{ url_for('reports') }}" class="nav-item text-gray-700 hover:text-blue-600 px-3 py-2 text-sm font-medium {% if request.endpoint in ['reports', 'customer_wise_report', 'period_based_report'] %}active text-blue-600{% endif %}">
+                            Reports
+                        </a>
                         {% if current_user.role == 'admin' %}
                         <a href="{{ url_for('manage_users') }}" class="nav-item text-gray-700 hover:text-blue-600 px-3 py-2 text-sm font-medium {% if request.endpoint == 'manage_users' %}active text-blue-600{% endif %}">
                             Manage Users
