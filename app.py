@@ -12,7 +12,8 @@ from functools import wraps
 
 # --- App & Database Configuration ---
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+# Use a consistent secret key for sessions to persist across server restarts
+app.secret_key = 'your-secret-key-here-change-in-production-2024'
 basedir = os.path.abspath(os.path.dirname(__file__))
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(basedir, 'calculator.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -54,10 +55,10 @@ class User(db.Model):
     role = db.Column(db.String(20), nullable=False, default='user')  # admin, manager, user
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    
+
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
-    
+
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
@@ -93,7 +94,7 @@ def role_required(role):
             if 'user_id' not in session:
                 flash('Please log in to access this page.', 'error')
                 return redirect(url_for('login'))
-            
+
             user = User.query.get(session['user_id'])
             if not user or user.role != role:
                 flash(f'Access denied. {role.title()} role required.', 'error')
@@ -234,7 +235,14 @@ def calculate_data(customer):
 
     # Check interest type and use appropriate calculation
     if customer.interest_type == 'simple':
-        return calculate_simple_interest_data(customer, settings)
+        if customer.frequency == 'monthly':
+            return calculate_monthly_simple_interest_data(customer, settings)
+        elif customer.frequency == 'quarterly':
+            return calculate_simple_interest_data(customer, settings)
+        elif customer.frequency == 'yearly':
+            return calculate_yearly_simple_interest_data(customer, settings)
+        else: # Default to quarterly if frequency is unrecognized
+            return calculate_simple_interest_data(customer, settings)
     else:
         # Use appropriate compound interest calculation based on frequency
         if customer.frequency == 'monthly':
@@ -407,8 +415,16 @@ def calculate_simple_interest_data(customer, settings):
                     end_date = next_tx_date
                     is_last_tx_in_quarter = False
 
-        # For inclusive repayment method, adjust the calculation period
-        if is_first_tx_in_quarter and is_repayment and customer.repayment_method == 'inclusive':
+        # Special condition for exclusive method: if first transaction is repayment on quarter end date, use inclusive logic
+        use_inclusive_logic = False
+        if customer.repayment_method == 'inclusive':
+            use_inclusive_logic = True
+        elif (customer.repayment_method == 'exclusive' and is_first_tx_in_quarter and 
+              is_repayment and tx_date == tx_quarter_info['endDate']):
+            use_inclusive_logic = True
+
+        # For inclusive repayment method or special exclusive condition, adjust the calculation period
+        if is_first_tx_in_quarter and is_repayment and use_inclusive_logic:
             # For inclusive method, calculate interest from quarter start to repayment date (including repayment date)
             opening_period_end = tx_date
             opening_days = (opening_period_end - tx_quarter_info['startDate']).days + 1  # +1 to include repayment date
@@ -416,7 +432,7 @@ def calculate_simple_interest_data(customer, settings):
             # Calculate the reduced principal balance after repayment
             # For simple interest, principal balance after this transaction
             reduced_principal_balance = principal_balance
-            
+
             # Get the original principal balance before this transaction
             original_principal_balance = principal_balance - Decimal(tx.paid) + Decimal(tx.received)
 
@@ -452,14 +468,19 @@ def calculate_simple_interest_data(customer, settings):
             # Update current quarter net interest
             current_quarter_net_interest = opening_net
 
-            # Now calculate remaining period after repayment (exclusive)
-            calculation_start_date = tx_date + timedelta(days=1)
-            days = (end_date - calculation_start_date).days
-            if is_last_tx_in_quarter: days += 1
-
-            # Ensure days is not negative
-            if days < 0:
+            # Check if loan is fully repaid (outstanding becomes zero or negative)
+            if outstanding_for_this_row <= Decimal('0'):
+                # Loan is fully repaid, no further interest calculation
                 days = 0
+            else:
+                # Now calculate remaining period after repayment (exclusive)
+                calculation_start_date = tx_date + timedelta(days=1)
+                days = (end_date - calculation_start_date).days
+                if is_last_tx_in_quarter: days += 1
+
+                # Ensure days is not negative
+                if days < 0:
+                    days = 0
         else:
             # Standard calculation for non-inclusive or non-first-repayment transactions
             days = (end_date - tx_date).days
@@ -510,11 +531,587 @@ def calculate_simple_interest_data(customer, settings):
     final_outstanding = running_outstanding + current_quarter_net_interest
     last_tx_date = sorted_txs[-1].date
     last_tx_quarter_info = get_quarter_info(last_tx_date, customer.icl_start_date)
+
     timeline.append({
         'id': f"summary-{last_tx_quarter_info['name']}",
         'date': last_tx_quarter_info['endDate'],
         'description': f"{last_tx_quarter_info['name']} Net Interest",
         'paid': current_quarter_net_interest, 
+        'received': Decimal('0'), 
+        'isSummary': True,
+        'outstanding': final_outstanding,
+        'principal_balance': principal_balance
+    })
+
+    return timeline
+
+def calculate_monthly_simple_interest_data(customer, settings):
+    """Calculate data using simple interest logic with monthly frequency and existing period splitting but interest on principal only"""
+    sorted_txs = sorted(customer.transactions, key=lambda x: x.date)
+
+    timeline = []
+    running_outstanding = Decimal('0')
+    current_month_net_interest = Decimal('0')
+    principal_balance = Decimal('0')  # Track principal balance separately
+
+    first_tx_date = sorted_txs[0].date
+    last_month_info = get_month_info(first_tx_date, customer.icl_start_date)
+
+    def add_missing_months(from_month_info, to_month_info, outstanding_balance, principal_bal):
+        """Add missing months between two months for simple interest"""
+        current_month = from_month_info
+
+        while current_month['name'] != to_month_info['name']:
+            # Calculate next month
+            next_start_month_num = current_month['startDate'].month + 1
+            next_start_year = current_month['startDate'].year
+            if next_start_month_num > 12:
+                next_start_month_num = 1
+                next_start_year += 1
+
+            # Use the day from the customer's start date for consistency
+            next_month_start = datetime(next_start_year, next_start_month_num, customer.icl_start_date.day).date()
+            next_month_info = get_month_info(next_month_start, customer.icl_start_date)
+
+            if next_month_info['name'] == to_month_info['name']:
+                break
+
+            # Check if missing month end date exceeds ICL end date
+            month_end_date = next_month_info['endDate']
+            if customer.icl_end_date and month_end_date > customer.icl_end_date:
+                month_end_date = customer.icl_end_date
+
+            # Calculate interest for the missing month on PRINCIPAL BALANCE ONLY
+            days_in_month = (month_end_date - current_month['endDate']).days
+            # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year = 365
+            if is_leap(current_month['endDate'].year):
+                # Check if the month period includes Feb 29
+                start_date = current_month['endDate']
+                end_date = month_end_date
+                feb_29 = datetime(current_month['endDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year = 366
+
+            month_interest = (principal_bal * (settings['interestRate'] / Decimal('100')) * Decimal(days_in_month)) / Decimal(days_in_year)
+            month_net = month_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+
+            # Add missing month entry
+            timeline.append({
+                'id': f"missing-{next_month_info['name']}",
+                'date': month_end_date,
+                'description': f"{next_month_info['name']} Net Interest (No Transactions)",
+                'paid': month_net,
+                'received': Decimal('0'),
+                'isSummary': True,
+                'isMissing': True,
+                'outstanding': outstanding_balance + month_net,
+                'principal_balance': principal_bal,
+                'interest': month_interest,
+                'tds': month_interest - month_net,
+                'net': month_net,
+                'days': days_in_month
+            })
+
+            outstanding_balance += month_net
+            current_month = next_month_info
+
+            # Stop if we've reached ICL end date
+            if customer.icl_end_date and month_end_date >= customer.icl_end_date:
+                break
+
+        return outstanding_balance
+
+    for i, tx in enumerate(sorted_txs):
+        tx_date = tx.date
+        tx_month_info = get_month_info(tx_date, customer.icl_start_date)
+
+        # Check if this is the first transaction in a new month and if it's a repayment
+        is_first_tx_in_month = tx_month_info['name'] != last_month_info['name']
+        is_repayment = Decimal(tx.received) > Decimal('0')
+
+        if is_first_tx_in_month:
+            # Close previous month
+            running_outstanding += current_month_net_interest
+            timeline.append({
+                'id': f"summary-{last_month_info['name']}",
+                'date': last_month_info['endDate'],
+                'description': f"{last_month_info['name']} Net Interest",
+                'paid': current_month_net_interest, 
+                'received': Decimal('0'), 
+                'isSummary': True,
+                'outstanding': running_outstanding,
+                'principal_balance': principal_balance
+            })
+
+            # Add missing months if any
+            running_outstanding = add_missing_months(last_month_info, tx_month_info, running_outstanding, principal_balance)
+
+            # Add opening balance for current month (respecting ICL end date)
+            opening_end_date = tx_date
+            if customer.icl_end_date and opening_end_date > customer.icl_end_date:
+                opening_end_date = customer.icl_end_date
+
+            days_opening = (opening_end_date - tx_month_info['startDate']).days
+            # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year_opening = 365
+            if is_leap(tx_month_info['startDate'].year):
+                # Check if the opening period includes Feb 29
+                start_date = tx_month_info['startDate']
+                end_date = opening_end_date
+                feb_29 = datetime(tx_month_info['startDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year_opening = 366
+
+            # Calculate interest on PRINCIPAL BALANCE ONLY (not accumulated balance)
+            interest_opening = (principal_balance * (settings['interestRate'] / Decimal('100')) * Decimal(days_opening)) / Decimal(days_in_year_opening)
+            net_opening = interest_opening * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+
+            timeline.append({
+                'id': f"opening-{tx_month_info['name']}",
+                'date': tx_month_info['startDate'],
+                'description': 'Opening Balance',
+                'paid': Decimal('0'), 
+                'received': Decimal('0'), 
+                'isOpening': True,
+                'outstanding': running_outstanding,
+                'principal_balance': principal_balance,
+                'interest': interest_opening,
+                'tds': interest_opening - net_opening,
+                'net': net_opening
+            })
+
+            current_month_net_interest = net_opening
+            last_month_info = tx_month_info
+
+        # Update principal balance based on transaction
+        principal_balance = principal_balance + Decimal(tx.paid) - Decimal(tx.received)
+        outstanding_for_this_row = running_outstanding + Decimal(tx.paid) - Decimal(tx.received)
+
+        next_tx = sorted_txs[i + 1] if i + 1 < len(sorted_txs) else None
+        end_date = tx_month_info['endDate']
+        is_last_tx_in_month = True
+
+        # Respect ICL end date constraint - don't calculate interest beyond ICL end date
+        if customer.icl_end_date and end_date > customer.icl_end_date:
+            end_date = customer.icl_end_date
+            is_last_tx_in_month = True
+
+        if next_tx:
+            next_tx_date = next_tx.date
+            next_tx_month_info = get_month_info(next_tx_date, customer.icl_start_date)
+            if next_tx_month_info['name'] == tx_month_info['name']:
+                # Also check ICL end date for next transaction
+                if not customer.icl_end_date or next_tx_date <= customer.icl_end_date:
+                    end_date = next_tx_date
+                    is_last_tx_in_month = False
+
+        # Special condition for exclusive method: if first transaction is repayment on month end date, use inclusive logic
+        use_inclusive_logic = False
+        if customer.repayment_method == 'inclusive':
+            use_inclusive_logic = True
+        elif (customer.repayment_method == 'exclusive' and is_first_tx_in_month and 
+              is_repayment and tx_date == tx_month_info['endDate']):
+            use_inclusive_logic = True
+
+        # For inclusive repayment method or special exclusive condition, adjust the calculation period
+        if is_first_tx_in_month and is_repayment and use_inclusive_logic:
+            # For inclusive method, calculate interest from month start to repayment date (including repayment date)
+            opening_period_end = tx_date
+            opening_days = (opening_period_end - tx_month_info['startDate']).days + 1  # +1 to include repayment date
+
+            # Calculate the reduced principal balance after repayment
+            # For simple interest, principal balance after this transaction
+            reduced_principal_balance = principal_balance
+
+            # Get the original principal balance before this transaction
+            original_principal_balance = principal_balance - Decimal(tx.paid) + Decimal(tx.received)
+
+            # Special condition: If repayment amount is larger than outstanding amount, 
+            # use original principal balance for interest calculation
+            balance_for_interest_calculation = reduced_principal_balance
+            if Decimal(tx.received) > running_outstanding:
+                balance_for_interest_calculation = original_principal_balance
+
+            # Calculate interest for the opening period on the appropriate balance (month start to repayment date inclusive)
+            # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year_opening = 365
+            if is_leap(tx_month_info['startDate'].year):
+                # Check if the opening period includes Feb 29
+                start_date = tx_month_info['startDate']
+                end_date = opening_period_end
+                feb_29 = datetime(tx_month_info['startDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year_opening = 366
+
+            opening_interest = (balance_for_interest_calculation * (settings['interestRate'] / Decimal('100')) * Decimal(opening_days)) / Decimal(days_in_year_opening)
+            opening_net = opening_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+
+            # Update the opening balance entry with correct interest calculation
+            for entry in timeline:
+                if entry.get('id') == f"opening-{tx_month_info['name']}":
+                    entry['days'] = opening_days
+                    entry['interest'] = opening_interest
+                    entry['net'] = opening_net
+                    entry['tds'] = opening_interest - net_opening
+                    break
+
+            # Update current month net interest
+            current_month_net_interest = opening_net
+
+            # Check if loan is fully repaid (outstanding becomes zero or negative)
+            if outstanding_for_this_row <= Decimal('0'):
+                # Loan is fully repaid, no further interest calculation
+                days = 0
+            else:
+                # Now calculate remaining period after repayment (exclusive)
+                calculation_start_date = tx_date + timedelta(days=1)
+                days = (end_date - calculation_start_date).days
+                if is_last_tx_in_month: days += 1
+
+                # Ensure days is not negative
+                if days < 0:
+                    days = 0
+        else:
+            # Standard calculation for non-inclusive or non-first-repayment transactions
+            days = (end_date - tx_date).days
+            if is_last_tx_in_month: days += 1
+
+        # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
+        days_in_year = 365
+        if is_leap(tx_date.year):
+            # Check if the calculation period includes Feb 29
+            start_date = tx_date
+            end_date = tx_date + timedelta(days=days)
+            feb_29 = datetime(tx_date.year, 2, 29).date()
+            if start_date <= feb_29 <= end_date:
+                days_in_year = 366
+
+        # SIMPLE INTEREST: Calculate interest on PRINCIPAL BALANCE ONLY (not accumulated balance)
+        interest = (principal_balance * (settings['interestRate'] / Decimal('100')) * Decimal(days)) / Decimal(days_in_year)
+
+        # Calculate penalty interest for overdue scenarios (on principal balance)
+        penalty_interest = Decimal('0')
+        if customer.icl_end_date and tx_date > customer.icl_end_date:
+            overdue_days_for_tx = calculate_overdue_days(customer, tx_date)
+            if overdue_days_for_tx > 0:
+                penalty_interest = calculate_penalty_interest(principal_balance, customer.penalty_rate, min(overdue_days_for_tx, days))
+
+        total_interest = interest + penalty_interest
+        net = total_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+        current_month_net_interest += net
+
+        timeline.append({
+            'id': tx.id,
+            'date': tx.date,
+            'description': tx.description,
+            'paid': Decimal(tx.paid),
+            'received': Decimal(tx.received),
+            'days': days, 
+            'interest': interest,
+            'penalty_interest': penalty_interest,
+            'total_interest': total_interest,
+            'net': net, 
+            'tds': total_interest - net, 
+            'outstanding': outstanding_for_this_row,
+            'principal_balance': principal_balance,
+            'is_overdue': customer.icl_end_date and tx_date > customer.icl_end_date
+        })
+        running_outstanding = outstanding_for_this_row
+
+    final_outstanding = running_outstanding + current_month_net_interest
+    last_tx_date = sorted_txs[-1].date
+    last_tx_month_info = get_month_info(last_tx_date, customer.icl_start_date)
+
+    timeline.append({
+        'id': f"summary-{last_tx_month_info['name']}",
+        'date': last_tx_month_info['endDate'],
+        'description': f"{last_tx_month_info['name']} Net Interest",
+        'paid': current_month_net_interest, 
+        'received': Decimal('0'), 
+        'isSummary': True,
+        'outstanding': final_outstanding,
+        'principal_balance': principal_balance
+    })
+
+    return timeline
+
+def calculate_yearly_simple_interest_data(customer, settings):
+    """Calculate data using simple interest logic with yearly frequency and existing period splitting but interest on principal only"""
+    sorted_txs = sorted(customer.transactions, key=lambda x: x.date)
+
+    timeline = []
+    running_outstanding = Decimal('0')
+    current_year_net_interest = Decimal('0')
+    principal_balance = Decimal('0')  # Track principal balance separately
+
+    first_tx_date = sorted_txs[0].date
+    last_year_info = get_financial_year_info(first_tx_date, customer.icl_start_date)
+
+    def add_missing_years(from_year_info, to_year_info, outstanding_balance, principal_bal):
+        """Add missing financial years between two years for simple interest"""
+        current_year = from_year_info
+
+        while current_year['name'] != to_year_info['name']:
+            # Calculate next financial year
+            next_year_start = datetime(current_year['startDate'].year + 1, 4, 1).date()
+            next_year_info = get_financial_year_info(next_year_start, customer.icl_start_date)
+
+            if next_year_info['name'] == to_year_info['name']:
+                break
+
+            # Check if missing year end date exceeds ICL end date
+            year_end_date = next_year_info['endDate']
+            if customer.icl_end_date and year_end_date > customer.icl_end_date:
+                year_end_date = customer.icl_end_date
+
+            # Calculate interest for the missing year on PRINCIPAL BALANCE ONLY
+            days_in_year_period = (year_end_date - current_year['endDate']).days
+            # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year = 365
+            if is_leap(current_year['endDate'].year):
+                # Check if the year period includes Feb 29
+                start_date = current_year['endDate']
+                end_date = year_end_date
+                feb_29 = datetime(current_year['endDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year = 366
+
+            year_interest = (principal_bal * (settings['interestRate'] / Decimal('100')) * Decimal(days_in_year_period)) / Decimal(days_in_year)
+            year_net = year_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+
+            # Add missing year entry
+            timeline.append({
+                'id': f"missing-{next_year_info['name']}",
+                'date': year_end_date,
+                'description': f"{next_year_info['name']} Net Interest (No Transactions)",
+                'paid': year_net,
+                'received': Decimal('0'),
+                'isSummary': True,
+                'isMissing': True,
+                'outstanding': outstanding_balance + year_net,
+                'principal_balance': principal_bal,
+                'interest': year_interest,
+                'tds': year_interest - year_net,
+                'net': year_net,
+                'days': days_in_year_period
+            })
+
+            outstanding_balance += year_net
+            current_year = next_year_info
+
+            # Stop if we've reached ICL end date
+            if customer.icl_end_date and year_end_date >= customer.icl_end_date:
+                break
+
+        return outstanding_balance
+
+    for i, tx in enumerate(sorted_txs):
+        tx_date = tx.date
+        tx_year_info = get_financial_year_info(tx_date, customer.icl_start_date)
+
+        # Check if this is the first transaction in a new year and if it's a repayment
+        is_first_tx_in_year = tx_year_info['name'] != last_year_info['name']
+        is_repayment = Decimal(tx.received) > Decimal('0')
+
+        if is_first_tx_in_year:
+            # Close previous year
+            running_outstanding += current_year_net_interest
+            timeline.append({
+                'id': f"summary-{last_year_info['name']}",
+                'date': last_year_info['endDate'],
+                'description': f"{last_year_info['name']} Net Interest",
+                'paid': current_year_net_interest, 
+                'received': Decimal('0'), 
+                'isSummary': True,
+                'outstanding': running_outstanding,
+                'principal_balance': principal_balance
+            })
+
+            # Add missing years if any
+            running_outstanding = add_missing_years(last_year_info, tx_year_info, running_outstanding, principal_balance)
+
+            # Add opening balance for current year (respecting ICL end date)
+            opening_end_date = tx_date
+            if customer.icl_end_date and opening_end_date > customer.icl_end_date:
+                opening_end_date = customer.icl_end_date
+
+            days_opening = (opening_end_date - tx_year_info['startDate']).days
+            # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year_opening = 365
+            if is_leap(tx_year_info['startDate'].year):
+                # Check if the opening period includes Feb 29
+                start_date = tx_year_info['startDate']
+                end_date = opening_end_date
+                feb_29 = datetime(tx_year_info['startDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year_opening = 366
+
+            # Calculate interest on PRINCIPAL BALANCE ONLY (not accumulated balance)
+            interest_opening = (principal_balance * (settings['interestRate'] / Decimal('100')) * Decimal(days_opening)) / Decimal(days_in_year_opening)
+            net_opening = interest_opening * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+
+            timeline.append({
+                'id': f"opening-{tx_year_info['name']}",
+                'date': tx_year_info['startDate'],
+                'description': 'Opening Balance',
+                'paid': Decimal('0'), 
+                'received': Decimal('0'), 
+                'isOpening': True,
+                'outstanding': running_outstanding,
+                'principal_balance': principal_balance,
+                'interest': interest_opening,
+                'tds': interest_opening - net_opening,
+                'net': net_opening
+            })
+
+            current_year_net_interest = net_opening
+            last_year_info = tx_year_info
+
+        # Update principal balance based on transaction
+        principal_balance = principal_balance + Decimal(tx.paid) - Decimal(tx.received)
+        outstanding_for_this_row = running_outstanding + Decimal(tx.paid) - Decimal(tx.received)
+
+        next_tx = sorted_txs[i + 1] if i + 1 < len(sorted_txs) else None
+        end_date = tx_year_info['endDate']
+        is_last_tx_in_year = True
+
+        # Respect ICL end date constraint - don't calculate interest beyond ICL end date
+        if customer.icl_end_date and end_date > customer.icl_end_date:
+            end_date = customer.icl_end_date
+            is_last_tx_in_year = True
+
+        if next_tx:
+            next_tx_date = next_tx.date
+            next_tx_year_info = get_financial_year_info(next_tx_date, customer.icl_start_date)
+            if next_tx_year_info['name'] == tx_year_info['name']:
+                # Also check ICL end date for next transaction
+                if not customer.icl_end_date or next_tx_date <= customer.icl_end_date:
+                    end_date = next_tx_date
+                    is_last_tx_in_year = False
+
+        # Special condition for exclusive method: if first transaction is repayment on year end date, use inclusive logic
+        use_inclusive_logic = False
+        if customer.repayment_method == 'inclusive':
+            use_inclusive_logic = True
+        elif (customer.repayment_method == 'exclusive' and is_first_tx_in_year and 
+              is_repayment and tx_date == tx_year_info['endDate']):
+            use_inclusive_logic = True
+
+        # For inclusive repayment method or special exclusive condition, adjust the calculation period
+        if is_first_tx_in_year and is_repayment and use_inclusive_logic:
+            # For inclusive method, calculate interest from year start to repayment date (including repayment date)
+            opening_period_end = tx_date
+            opening_days = (opening_period_end - tx_year_info['startDate']).days + 1  # +1 to include repayment date
+
+            # Calculate the reduced principal balance after repayment
+            # For simple interest, principal balance after this transaction
+            reduced_principal_balance = principal_balance
+
+            # Get the original principal balance before this transaction
+            original_principal_balance = principal_balance - Decimal(tx.paid) + Decimal(tx.received)
+
+            # Special condition: If repayment amount is larger than outstanding amount, 
+            # use original principal balance for interest calculation
+            balance_for_interest_calculation = reduced_principal_balance
+            if Decimal(tx.received) > running_outstanding:
+                balance_for_interest_calculation = original_principal_balance
+
+            # Calculate interest for the opening period on the appropriate balance (year start to repayment date inclusive)
+            # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year_opening = 365
+            if is_leap(tx_year_info['startDate'].year):
+                # Check if the opening period includes Feb 29
+                start_date = tx_year_info['startDate']
+                end_date = opening_period_end
+                feb_29 = datetime(tx_year_info['startDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year_opening = 366
+
+            opening_interest = (balance_for_interest_calculation * (settings['interestRate'] / Decimal('100')) * Decimal(opening_days)) / Decimal(days_in_year_opening)
+            opening_net = opening_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+
+            # Update the opening balance entry with correct interest calculation
+            for entry in timeline:
+                if entry.get('id') == f"opening-{tx_year_info['name']}":
+                    entry['days'] = opening_days
+                    entry['interest'] = opening_interest
+                    entry['net'] = opening_net
+                    entry['tds'] = opening_interest - opening_net
+                    break
+
+            # Update current year net interest
+            current_year_net_interest = opening_net
+
+            # Check if loan is fully repaid (outstanding becomes zero or negative)
+            if outstanding_for_this_row <= Decimal('0'):
+                # Loan is fully repaid, no further interest calculation
+                days = 0
+            else:
+                # Now calculate remaining period after repayment (exclusive)
+                calculation_start_date = tx_date + timedelta(days=1)
+                days = (end_date - calculation_start_date).days
+                if is_last_tx_in_year: days += 1
+
+                # Ensure days is not negative
+                if days < 0:
+                    days = 0
+        else:
+            # Standard calculation for non-inclusive or non-first-repayment transactions
+            days = (end_date - tx_date).days
+            if is_last_tx_in_year: days += 1
+
+        # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
+        days_in_year = 365
+        if is_leap(tx_date.year):
+            # Check if the calculation period includes Feb 29
+            start_date = tx_date
+            end_date = tx_date + timedelta(days=days)
+            feb_29 = datetime(tx_date.year, 2, 29).date()
+            if start_date <= feb_29 <= end_date:
+                days_in_year = 366
+
+        # SIMPLE INTEREST: Calculate interest on PRINCIPAL BALANCE ONLY (not accumulated balance)
+        interest = (principal_balance * (settings['interestRate'] / Decimal('100')) * Decimal(days)) / Decimal(days_in_year)
+
+        # Calculate penalty interest for overdue scenarios (on principal balance)
+        penalty_interest = Decimal('0')
+        if customer.icl_end_date and tx_date > customer.icl_end_date:
+            overdue_days_for_tx = calculate_overdue_days(customer, tx_date)
+            if overdue_days_for_tx > 0:
+                penalty_interest = calculate_penalty_interest(principal_balance, customer.penalty_rate, min(overdue_days_for_tx, days))
+
+        total_interest = interest + penalty_interest
+        net = total_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+        current_year_net_interest += net
+
+        timeline.append({
+            'id': tx.id,
+            'date': tx.date,
+            'description': tx.description,
+            'paid': Decimal(tx.paid),
+            'received': Decimal(tx.received),
+            'days': days, 
+            'interest': interest,
+            'penalty_interest': penalty_interest,
+            'total_interest': total_interest,
+            'net': net, 
+            'tds': total_interest - net, 
+            'outstanding': outstanding_for_this_row,
+            'principal_balance': principal_balance,
+            'is_overdue': customer.icl_end_date and tx_date > customer.icl_end_date
+        })
+        running_outstanding = outstanding_for_this_row
+
+    final_outstanding = running_outstanding + current_year_net_interest
+    last_tx_date = sorted_txs[-1].date
+    last_tx_year_info = get_financial_year_info(last_tx_date, customer.icl_start_date)
+
+    timeline.append({
+        'id': f"summary-{last_tx_year_info['name']}",
+        'date': last_tx_year_info['endDate'],
+        'description': f"{last_tx_year_info['name']} Net Interest",
+        'paid': current_year_net_interest, 
         'received': Decimal('0'), 
         'isSummary': True,
         'outstanding': final_outstanding,
@@ -655,8 +1252,16 @@ def calculate_compound_interest_data(customer, settings):
                     end_date = next_tx_date
                     is_last_tx_in_quarter = False
 
-        # For inclusive repayment method, adjust the calculation period
-        if is_first_tx_in_quarter and is_repayment and customer.repayment_method == 'inclusive':
+        # Special condition for exclusive method: if first transaction is repayment on quarter end date, use inclusive logic
+        use_inclusive_logic = False
+        if customer.repayment_method == 'inclusive':
+            use_inclusive_logic = True
+        elif (customer.repayment_method == 'exclusive' and is_first_tx_in_quarter and 
+              is_repayment and tx_date == tx_quarter_info['endDate']):
+            use_inclusive_logic = True
+
+        # For inclusive repayment method or special exclusive condition, adjust the calculation period
+        if is_first_tx_in_quarter and is_repayment and use_inclusive_logic:
             # For inclusive method, calculate interest from quarter start to repayment date (including repayment date)
             opening_period_end = tx_date
             opening_days = (opening_period_end - tx_quarter_info['startDate']).days + 1  # +1 to include repayment date
@@ -695,14 +1300,19 @@ def calculate_compound_interest_data(customer, settings):
             # Update current quarter net interest
             current_quarter_net_interest = opening_net
 
-            # Now calculate remaining period after repayment (exclusive)
-            calculation_start_date = tx_date + timedelta(days=1)
-            days = (end_date - calculation_start_date).days
-            if is_last_tx_in_quarter: days += 1
-
-            # Ensure days is not negative
-            if days < 0:
+            # Check if loan is fully repaid (outstanding becomes zero or negative)
+            if outstanding_for_this_row <= Decimal('0'):
+                # Loan is fully repaid, no further interest calculation
                 days = 0
+            else:
+                # Now calculate remaining period after repayment (exclusive)
+                calculation_start_date = tx_date + timedelta(days=1)
+                days = (end_date - calculation_start_date).days
+                if is_last_tx_in_quarter: days += 1
+
+                # Ensure days is not negative
+                if days < 0:
+                    days = 0
         else:
             # Standard calculation for non-inclusive or non-first-repayment transactions
             days = (end_date - tx_date).days
@@ -750,6 +1360,7 @@ def calculate_compound_interest_data(customer, settings):
     final_outstanding = running_outstanding + current_quarter_net_interest
     last_tx_date = sorted_txs[-1].date
     last_tx_quarter_info = get_quarter_info(last_tx_date, customer.icl_start_date)
+
     timeline.append({'id': f"summary-{last_tx_quarter_info['name']}",'date': last_tx_quarter_info['endDate'],'description': f"{last_tx_quarter_info['name']} Net Interest",'paid': current_quarter_net_interest, 'received': Decimal('0'), 'isSummary': True,'outstanding': final_outstanding})
 
     return timeline
@@ -832,7 +1443,11 @@ def calculate_monthly_compound_interest_data(customer, settings):
         tx_date = tx.date
         tx_month_info = get_month_info(tx_date, customer.icl_start_date)
 
-        if tx_month_info['name'] != last_month_info['name']:
+        # Check if this is the first transaction in a new month and if it's a repayment
+        is_first_tx_in_month = tx_month_info['name'] != last_month_info['name']
+        is_repayment = Decimal(tx.received) > Decimal('0')
+
+        if is_first_tx_in_month:
             # Close previous month
             running_outstanding += current_month_net_interest
             timeline.append({'id': f"summary-{last_month_info['name']}",'date': last_month_info['endDate'],'description': f"{last_month_info['name']} Net Interest",'paid': current_month_net_interest, 'received': Decimal('0'), 'isSummary': True,'outstanding': running_outstanding})
@@ -882,10 +1497,73 @@ def calculate_monthly_compound_interest_data(customer, settings):
                     end_date = next_tx_date
                     is_last_tx_in_month = False
 
-        days = (end_date - tx_date).days
-        if is_last_tx_in_month: days += 1
+        # Special condition for exclusive method: if first transaction is repayment on month end date, use inclusive logic
+        use_inclusive_logic = False
+        if customer.repayment_method == 'inclusive':
+            use_inclusive_logic = True
+        elif (customer.repayment_method == 'exclusive' and is_first_tx_in_month and 
+              is_repayment and tx_date == tx_month_info['endDate']):
+            use_inclusive_logic = True
 
-        # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+        # For inclusive repayment method or special exclusive condition, adjust the calculation period
+        if is_first_tx_in_month and is_repayment and use_inclusive_logic:
+            # For inclusive method, calculate interest from month start to repayment date (including repayment date)
+            opening_period_end = tx_date
+            opening_days = (opening_period_end - tx_month_info['startDate']).days + 1  # +1 to include repayment date
+
+            # Calculate the reduced outstanding balance after repayment
+            reduced_outstanding_balance = running_outstanding + Decimal(tx.paid) - Decimal(tx.received)
+
+            # Special condition: If repayment amount is larger than outstanding amount, 
+            # use original outstanding balance for interest calculation
+            balance_for_interest_calculation = reduced_outstanding_balance
+            if Decimal(tx.received) > running_outstanding:
+                balance_for_interest_calculation = running_outstanding
+
+            # Calculate interest for the opening period on the appropriate balance (month start to repayment date inclusive)
+            # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year_opening = 365
+            if is_leap(tx_month_info['startDate'].year):
+                # Check if the opening period includes Feb 29
+                start_date = tx_month_info['startDate']
+                end_date = opening_period_end
+                feb_29 = datetime(tx_month_info['startDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year_opening = 366
+            opening_interest = (balance_for_interest_calculation * (settings['interestRate'] / Decimal('100')) * Decimal(opening_days)) / Decimal(days_in_year_opening)
+            opening_net = opening_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+
+            # Update the opening balance entry with correct interest calculation
+            for entry in timeline:
+                if entry.get('id') == f"opening-{tx_month_info['name']}":
+                    entry['days'] = opening_days
+                    entry['interest'] = opening_interest
+                    entry['net'] = opening_net
+                    entry['tds'] = opening_interest - net_opening
+                    break
+
+            # Update current month net interest
+            current_month_net_interest = opening_net
+
+            # Check if loan is fully repaid (outstanding becomes zero or negative)
+            if outstanding_for_this_row <= Decimal('0'):
+                # Loan is fully repaid, no further interest calculation
+                days = 0
+            else:
+                # Now calculate remaining period after repayment (exclusive)
+                calculation_start_date = tx_date + timedelta(days=1)
+                days = (end_date - calculation_start_date).days
+                if is_last_tx_in_month: days += 1
+
+                # Ensure days is not negative
+                if days < 0:
+                    days = 0
+        else:
+            # Standard calculation for non-inclusive or non-first-repayment transactions
+            days = (end_date - tx_date).days
+            if is_last_tx_in_month: days += 1
+
+        # For simple interest, use 365 days consistently unless the calculation period includes Feb 29
         days_in_year = 365
         if is_leap(tx_date.year):
             # Check if the calculation period includes Feb 29
@@ -894,14 +1572,16 @@ def calculate_monthly_compound_interest_data(customer, settings):
             feb_29 = datetime(tx_date.year, 2, 29).date()
             if start_date <= feb_29 <= end_date:
                 days_in_year = 366
-        interest = (outstanding_for_this_row * (settings['interestRate'] / Decimal('100')) * Decimal(days)) / Decimal(days_in_year)
 
-        # Calculate penalty interest for overdue scenarios
+        # SIMPLE INTEREST: Calculate interest on PRINCIPAL BALANCE ONLY (not accumulated balance)
+        interest = (principal_balance * (settings['interestRate'] / Decimal('100')) * Decimal(days)) / Decimal(days_in_year)
+
+        # Calculate penalty interest for overdue scenarios (on principal balance)
         penalty_interest = Decimal('0')
         if customer.icl_end_date and tx_date > customer.icl_end_date:
             overdue_days_for_tx = calculate_overdue_days(customer, tx_date)
             if overdue_days_for_tx > 0:
-                penalty_interest = calculate_penalty_interest(outstanding_for_this_row, customer.penalty_rate, min(overdue_days_for_tx, days))
+                penalty_interest = calculate_penalty_interest(principal_balance, customer.penalty_rate, min(overdue_days_for_tx, days))
 
         total_interest = interest + penalty_interest
         net = total_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
@@ -920,6 +1600,7 @@ def calculate_monthly_compound_interest_data(customer, settings):
             'net': net, 
             'tds': total_interest - net, 
             'outstanding': outstanding_for_this_row,
+            'principal_balance': principal_balance,
             'is_overdue': customer.icl_end_date and tx_date > customer.icl_end_date
         })
         running_outstanding = outstanding_for_this_row
@@ -1002,7 +1683,11 @@ def calculate_yearly_compound_interest_data(customer, settings):
         tx_date = tx.date
         tx_year_info = get_financial_year_info(tx_date, customer.icl_start_date)
 
-        if tx_year_info['name'] != last_year_info['name']:
+        # Check if this is the first transaction in a new year and if it's a repayment
+        is_first_tx_in_year = tx_year_info['name'] != last_year_info['name']
+        is_repayment = Decimal(tx.received) > Decimal('0')
+
+        if is_first_tx_in_year:
             # Close previous financial year
             running_outstanding += current_year_net_interest
             timeline.append({'id': f"summary-{last_year_info['name']}",'date': last_year_info['endDate'],'description': f"{last_year_info['name']} Net Interest",'paid': current_year_net_interest, 'received': Decimal('0'), 'isSummary': True,'outstanding': running_outstanding})
@@ -1052,10 +1737,72 @@ def calculate_yearly_compound_interest_data(customer, settings):
                     end_date = next_tx_date
                     is_last_tx_in_year = False
 
-        # Calculate days - for yearly compounding, include both start and end dates
-        days = (end_date - tx_date).days
-        if is_last_tx_in_year: 
-            days += 1
+        # Special condition for exclusive method: if first transaction is repayment on year end date, use inclusive logic
+        use_inclusive_logic = False
+        if customer.repayment_method == 'inclusive':
+            use_inclusive_logic = True
+        elif (customer.repayment_method == 'exclusive' and is_first_tx_in_year and 
+              is_repayment and tx_date == tx_year_info['endDate']):
+            use_inclusive_logic = True
+
+        # For inclusive repayment method or special exclusive condition, adjust the calculation period
+        if is_first_tx_in_year and is_repayment and use_inclusive_logic:
+            # For inclusive method, calculate interest from year start to repayment date (including repayment date)
+            opening_period_end = tx_date
+            opening_days = (opening_period_end - tx_year_info['startDate']).days + 1  # +1 to include repayment date
+
+            # Calculate the reduced outstanding balance after repayment
+            reduced_outstanding_balance = running_outstanding + Decimal(tx.paid) - Decimal(tx.received)
+
+            # Special condition: If repayment amount is larger than outstanding amount, 
+            # use original outstanding balance for interest calculation
+            balance_for_interest_calculation = reduced_outstanding_balance
+            if Decimal(tx.received) > running_outstanding:
+                balance_for_interest_calculation = running_outstanding
+
+            # Calculate interest for the opening period on the appropriate balance (year start to repayment date inclusive)
+            # For compound interest, use 365 days consistently unless the calculation period includes Feb 29
+            days_in_year_opening = 365
+            if is_leap(tx_year_info['startDate'].year):
+                # Check if the opening period includes Feb 29
+                start_date = tx_year_info['startDate']
+                end_date = opening_period_end
+                feb_29 = datetime(tx_year_info['startDate'].year, 2, 29).date()
+                if start_date <= feb_29 <= end_date:
+                    days_in_year_opening = 366
+            opening_interest = (balance_for_interest_calculation * (settings['interestRate'] / Decimal('100')) * Decimal(opening_days)) / Decimal(days_in_year_opening)
+            opening_net = opening_interest * (Decimal('1') - settings['tdsRate'] / Decimal('100'))
+
+            # Update the opening balance entry with correct interest calculation
+            for entry in timeline:
+                if entry.get('id') == f"opening-{tx_year_info['name']}":
+                    entry['days'] = opening_days
+                    entry['interest'] = opening_interest
+                    entry['net'] = opening_net
+                    entry['tds'] = opening_interest - opening_net
+                    break
+
+            # Update current year net interest
+            current_year_net_interest = opening_net
+
+            # Check if loan is fully repaid (outstanding becomes zero or negative)
+            if outstanding_for_this_row <= Decimal('0'):
+                # Loan is fully repaid, no further interest calculation
+                days = 0
+            else:
+                # Now calculate remaining period after repayment (exclusive)
+                calculation_start_date = tx_date + timedelta(days=1)
+                days = (end_date - calculation_start_date).days
+                if is_last_tx_in_year: days += 1
+
+                # Ensure days is not negative
+                if days < 0:
+                    days = 0
+        else:
+            # Calculate days - for yearly compounding, include both start and end dates
+            days = (end_date - tx_date).days
+            if is_last_tx_in_year: 
+                days += 1
 
         # For yearly compounding, use 365 days as standard practice unless it's a leap year calculation
         days_in_year = 365  # Standard year for interest calculation
@@ -1118,15 +1865,15 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        
+
         user = User.query.filter_by(username=username).first()
-        
+
         if user and user.check_password(password) and user.is_active:
             session['user_id'] = user.id
             session['username'] = user.username
             session['role'] = user.role
             flash(f'Welcome back, {user.username}!', 'success')
-            
+
             # Redirect to next page if specified, otherwise to index
             next_page = request.args.get('next')
             if next_page:
@@ -1134,7 +1881,7 @@ def login():
             return redirect(url_for('index'))
         else:
             flash('Invalid username or password.', 'error')
-    
+
     return render_template('login.html')
 
 @app.route('/logout')
@@ -1150,26 +1897,26 @@ def register():
         email = request.form['email']
         password = request.form['password']
         role = request.form.get('role', 'user')
-        
+
         # Check if user already exists
         if User.query.filter_by(username=username).first():
             flash('Username already exists.', 'error')
             return render_template('register.html')
-        
+
         if User.query.filter_by(email=email).first():
             flash('Email already exists.', 'error')
             return render_template('register.html')
-        
+
         # Create new user
         new_user = User(username=username, email=email, role=role)
         new_user.set_password(password)
-        
+
         db.session.add(new_user)
         db.session.commit()
-        
+
         flash('Registration successful! Please log in.', 'success')
         return redirect(url_for('login'))
-    
+
     return render_template('register.html')
 
 @app.route('/users')
@@ -1199,30 +1946,54 @@ def customer_detail(customer_id):
 @login_required
 def add_customer():
     if request.method == 'POST':
-        icl_end_date = None
-        if request.form.get('icl_end_date'):
-            icl_end_date = datetime.strptime(request.form['icl_end_date'], '%Y-%m-%d').date()
+        name = request.form['name']
+        address = request.form.get('address', '')
+        icl_start_date = datetime.strptime(request.form['icl_start_date'], '%Y-%m-%d').date()
+        icl_end_date = request.form.get('icl_end_date')
+        if icl_end_date:
+            icl_end_date = datetime.strptime(icl_end_date, '%Y-%m-%d').date()
+        else:
+            icl_end_date = None
 
-        new_customer = Customer(
-            name=request.form['name'],
-            address=request.form['address'],
-            icl_start_date=datetime.strptime(request.form['icl_start_date'], '%Y-%m-%d').date(),
+        interest_rate = float(request.form['interest_rate'])
+
+        # Handle TDS checkbox
+        tds_enabled = 'tds_enabled' in request.form
+        if tds_enabled and request.form.get('tds_rate'):
+            tds_rate = float(request.form['tds_rate'])
+        else:
+            tds_rate = 0.0
+
+        penalty_rate = float(request.form.get('penalty_rate', 2.0))
+        grace_period = int(request.form.get('grace_period', 30))
+        frequency = request.form['frequency']
+        interest_type = request.form.get('interest_type', 'compound')
+        repayment_method = request.form.get('repayment_method', 'exclusive')
+
+        customer = Customer(
+            name=name,
+            address=address,
+            icl_start_date=icl_start_date,
             icl_end_date=icl_end_date,
-            interest_rate=float(request.form['interest_rate']),
-            tds_rate=float(request.form['tds_rate']),
-            interest_type=request.form['interest_type'],
-            frequency=request.form['frequency'],
-            penalty_rate=float(request.form.get('penalty_rate', 2.0)),
-            grace_period=int(request.form.get('grace_period', 30)),
-            repayment_method=request.form.get('repayment_method', 'exclusive')
+            interest_rate=interest_rate,
+            tds_rate=tds_rate,
+            penalty_rate=penalty_rate,
+            grace_period=grace_period,
+            frequency=frequency,
+            interest_type=interest_type,
+            repayment_method=repayment_method
         )
-        db.session.add(new_customer)
+
+        db.session.add(customer)
         db.session.commit()
-        flash(f"Customer '{new_customer.name}' added successfully!", 'success')
+        flash('Customer added successfully!', 'success')
         return redirect(url_for('index'))
-    return render_template('add_customer.html')
+
+    current_user = get_current_user()
+    return render_template('add_customer.html', current_user=current_user)
 
 @app.route('/edit_customer/<int:customer_id>', methods=['GET', 'POST'])
+@login_required
 def edit_customer(customer_id):
     customer = Customer.query.get_or_404(customer_id)
     if request.method == 'POST':
@@ -1234,7 +2005,11 @@ def edit_customer(customer_id):
         else:
             customer.icl_end_date = None
         customer.interest_rate = float(request.form['interest_rate'])
-        customer.tds_rate = float(request.form['tds_rate'])
+        # Handle optional TDS
+        if request.form.get('tds_enabled'):
+            customer.tds_rate = float(request.form.get('tds_rate', 0))
+        else:
+            customer.tds_rate = 0.0
         customer.interest_type = request.form['interest_type']
         customer.frequency = request.form['frequency']
         customer.penalty_rate = float(request.form.get('penalty_rate', customer.penalty_rate))
@@ -1243,7 +2018,8 @@ def edit_customer(customer_id):
         db.session.commit()
         flash(f"Customer '{customer.name}' updated successfully!", 'success')
         return redirect(url_for('customer_detail', customer_id=customer.id))
-    return render_template('edit_customer.html', customer=customer)
+    current_user = get_current_user()
+    return render_template('edit_customer.html', customer=customer, current_user=current_user)
 
 @app.route('/delete_customer/<int:customer_id>', methods=['POST'])
 def delete_customer(customer_id):
@@ -1293,10 +2069,12 @@ def delete_all_transactions(customer_id):
     return redirect(url_for('customer_detail', customer_id=customer.id))
 
 @app.route('/customer/<int:customer_id>/reports')
+@login_required
 def customer_reports(customer_id):
     customer = Customer.query.get_or_404(customer_id)
     calculated_data = calculate_data(customer)
-    return render_template('customer_reports.html', customer=customer, data=calculated_data)
+    current_user = get_current_user()
+    return render_template('customer_reports.html', customer=customer, data=calculated_data, current_user=current_user)
 
 @app.route('/customer/<int:customer_id>/close_loan', methods=['POST'])
 def close_loan(customer_id):
@@ -1406,12 +2184,14 @@ def calculate_balance(customer_id):
 
         balance_result = calculate_balance_at_date(customer, calculation_date)
 
+    current_user = get_current_user()
     return render_template('balance_calculator.html', 
                          customer=customer, 
                          balance_result=balance_result,
                          recent_transactions=recent_transactions,
                          selected_date=selected_date,
-                         today=datetime.now().strftime('%Y-%m-%d'))
+                         today=datetime.now().strftime('%Y-%m-%d'),
+                         current_user=current_user)
 
 def calculate_balance_at_date(customer, target_date):
     """Calculate the exact balance at a specific date using the same logic as the main calculation"""
@@ -1589,17 +2369,17 @@ def create_default_users():
         admin_user = User(username='admin', email='admin@example.com', role='admin')
         admin_user.set_password('admin123')
         db.session.add(admin_user)
-    
+
     if not User.query.filter_by(username='manager').first():
         manager_user = User(username='manager', email='manager@example.com', role='manager')
         manager_user.set_password('manager123')
         db.session.add(manager_user)
-    
+
     if not User.query.filter_by(username='user').first():
         user_user = User(username='user', email='user@example.com', role='user')
         user_user.set_password('user123')
         db.session.add(user_user)
-    
+
     db.session.commit()
 
 if __name__ == '__main__':
