@@ -45,6 +45,7 @@
                     <div class="flex-shrink-0">
                         <h1 class="text-xl font-bold text-gray-900">ICL Calculator</h1>
                     </div>
+                    {% if current_user %}
                     <div class="hidden md:ml-10 md:flex md:space-x-8">
                         <a href="{{ url_for('index') }}" class="nav-item text-gray-700 hover:text-blue-600 px-3 py-2 text-sm font-medium {% if request.endpoint == 'index' %}active text-blue-600{% endif %}">
                             Dashboard
@@ -52,13 +53,36 @@
                         <a href="{{ url_for('customers') }}" class="nav-item text-gray-700 hover:text-blue-600 px-3 py-2 text-sm font-medium {% if request.endpoint == 'customers' %}active text-blue-600{% endif %}">
                             Customers
                         </a>
+                        {% if current_user.role == 'admin' %}
+                        <a href="{{ url_for('manage_users') }}" class="nav-item text-gray-700 hover:text-blue-600 px-3 py-2 text-sm font-medium {% if request.endpoint == 'manage_users' %}active text-blue-600{% endif %}">
+                            Manage Users
+                        </a>
+                        {% endif %}
                     </div>
+                    {% endif %}
                 </div>
-                <div class="flex items-center">
-                    <a href="{{ url_for('add_customer') }}" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 hover-lift">
-                        Add Customer
+                {% if current_user %}
+                <div class="flex items-center space-x-4">
+                    <span class="text-sm text-gray-700">
+                        Welcome, <strong>{{ current_user.username }}</strong>
+                        <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full 
+                            {% if current_user.role == 'admin' %}bg-red-100 text-red-800
+                            {% elif current_user.role == 'manager' %}bg-yellow-100 text-yellow-800
+                            {% else %}bg-green-100 text-green-800{% endif %}">
+                            {{ current_user.role.title() }}
+                        </span>
+                    </span>
+                    <a href="{{ url_for('logout') }}" class="text-gray-500 hover:text-gray-700 text-sm font-medium">
+                        Logout
                     </a>
                 </div>
+                {% else %}
+                <div class="flex items-center">
+                    <a href="{{ url_for('login') }}" class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 hover-lift">
+                        Login
+                    </a>
+                </div>
+                {% endif %}
             </div>
         </div>
     </nav>
