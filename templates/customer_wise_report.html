@@ -53,7 +53,11 @@
         <!-- Customer Info Header -->
         <div class="bg-gradient-to-r from-blue-500 to-purple-600 p-6 text-white">
             <h3 class="text-2xl font-bold mb-2">{{ report_data.customer.name }}</h3>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                    <span class="text-blue-100">Customer ID:</span>
+                    <span class="font-semibold ml-2">{{ report_data.customer.customer_id }}</span>
+                </div>
                 <div>
                     <span class="text-blue-100">ICL Start Date:</span>
                     <span class="font-semibold ml-2">{{ report_data.customer.icl_start_date | format_date }}</span>
